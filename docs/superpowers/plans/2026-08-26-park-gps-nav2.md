@@ -51,6 +51,7 @@
 | `tools/check_gps_localization.py` | Proves `map -> odom` exists and is sane. |
 | `tools/check_nav2_ready.py` | Proves the whole stack is up, including cmd_vel type. |
 | `tools/check_map_alignment.py` | Proves the generated map matches live lidar. |
+| `tools/check_local_avoidance.py` | Proves the local costmap avoids a tree the prior map omits. |
 | `tools/nav_goal.py` | Goal by map x/y/yaw. |
 | `tools/nav_goal_ll.py` | Goal by lat/lon via `fromLL`. |
 | `tools/nav_route.py` | Waypoint sequence from a file. |
@@ -76,6 +77,7 @@ Pure-python mesh and SDF parsing. No ROS, no sim. Everything here is unit-testab
   - `load_mesh(path: str) -> tuple[np.ndarray, np.ndarray]` — `(V, F)`, `V` float64 `(n,3)` in mesh-local metres with Z up, `F` int `(m,3)` vertex indices.
   - `pose_matrix(pose: Sequence[float]) -> np.ndarray` — 4x4 from `[x,y,z,roll,pitch,yaw]`.
   - `world_triangles(sdf_path: str, skip_models: set[str]) -> Iterator[tuple[str, np.ndarray]]` — yields `(model_name, T)` where `T` is float64 `(k,3,3)`, triangle vertices in world coordinates.
+  - `models_using_mesh_dir(sdf_path: str, dirname: str) -> set[str]` — names of models whose collision meshes live under `model://<dirname>/`. Used to exclude a model family from the prior map by asset, not by name pattern.
 
 ### Background the implementer needs
 
@@ -150,6 +152,16 @@ def test_world_triangles_covers_every_model_with_collision():
     assert len(names) == 97
     assert "parque" in names
     assert sum(1 for n in names if n.startswith("tree_8")) == 23
+
+
+def test_models_using_mesh_dir_finds_the_small_trees():
+    from tools.sdf_geometry import models_using_mesh_dir
+    arb = models_using_mesh_dir(SDF, "arbol4")
+    assert len(arb) == 15
+    assert "arbolpartes4" in arb
+    assert "arbolpartes4_clone_12" in arb
+    # tree_8 is a different asset and must not be caught
+    assert not any(n.startswith("tree_8") for n in arb)
 
 
 def test_skip_models_is_honoured():
@@ -415,6 +427,27 @@ def _pose_of(elem: ET.Element | None) -> np.ndarray:
     return pose_matrix([float(v) for v in p.text.split()])
 
 
+def models_using_mesh_dir(sdf_path: str, dirname: str) -> set[str]:
+    """Names of models whose collision meshes live under model://<dirname>/.
+
+    Selecting a model family by the asset it instances is stable against the
+    world's naming (arbolpartes4, arbolpartes4_clone, arbolpartes4_clone_12 ...)
+    and cannot accidentally catch a different model with a similar name.
+    """
+    root = ET.parse(sdf_path).getroot()
+    world = root.find("world")
+    out: set[str] = set()
+    if world is None:
+        return out
+    prefix = f"model://{dirname}/"
+    for model in world.findall("model"):
+        for col in model.iter("collision"):
+            for uri in col.iter("uri"):
+                if uri.text and uri.text.strip().startswith(prefix):
+                    out.add(model.get("name", ""))
+    return out
+
+
 def world_triangles(sdf_path: str, skip_models: set[str]) -> Iterator[tuple[str, np.ndarray]]:
     """Yield (model_name, triangles) with triangles float64 (k, 3, 3) in world coords."""
     root = ET.parse(sdf_path).getroot()
@@ -463,7 +496,7 @@ def world_triangles(sdf_path: str, skip_models: set[str]) -> Iterator[tuple[str,
 cd /home/thinhpham/Documents/Husky_viz && python3 -m pytest tests/test_sdf_geometry.py -v
 ```
 
-Expected: 6 passed.
+Expected: 7 passed.
 
 If `test_world_triangles_terrain_matches_measured_extent` fails, the bug is in unit handling, up-axis conversion, or pose composition — not in the test. The terrain extent was measured independently and is recorded in the spec.
 
@@ -499,6 +532,7 @@ up-axis, scale and all three pose levels at once."
 - Consumes: `tools.sdf_geometry.world_triangles`.
 - Produces:
   - `RES = 0.05`, `ORIGIN = (-55.0, -31.55)`, `SIZE = (2200, 1200)`, `TERRAIN = (-50.0, 50.0, -26.55, 23.45)`, `GROUND_Z = 2.98891`
+  - `PRIOR_EXCLUDE_MESH_DIRS = {"arbol4"}` — model families deliberately left out of the prior map
   - `world_to_pixel(x, y) -> tuple[int, int]`
   - `rasterize_obstacles(sdf_path, z_lo, z_hi) -> PIL.Image.Image`
   - `rasterize_keepout() -> PIL.Image.Image`
@@ -513,6 +547,28 @@ For the keepout mask, `KeepoutFilter` treats occupied cells as lethal. The park 
 **Why the 5 m margin.** The rasters span 5 m beyond the terrain on every side so the mask has cells outside the terrain to mark. Cropped exactly to the terrain there would be nowhere to draw the border.
 
 **Image row order.** Map YAML `origin` is the **bottom-left** corner in world coordinates, but image row 0 is the **top**. Row index is therefore `height - 1 - int((y - origin_y) / res)`. Getting this wrong flips the map vertically — which looks like a plausible map and is completely wrong.
+
+**Small trees are deliberately excluded from the prior map.** The 15 `arbol4`
+models (3.10 m footprint, 4.11 m tall — park's small canopy trees, as opposed
+to the 12.9 m `tree_8` specimens) are omitted so the global planner routes
+straight through them and the **local** costmap has to discover and avoid them
+from live lidar. This is the obstacle-avoidance demonstration, and it is a
+deliberate divergence between the prior map and reality, not a bug.
+
+Two of them sit near the recorded route's corridor: `arbolpartes4_clone_2` at
+`(5.67, 4.58)` and `arbolpartes4_clone_5` at `(-20.98, 2.64)`.
+
+Selection is by mesh directory (`model://arbol4/...`), not by name pattern, so
+it is stable against the world's `_clone_N` naming.
+
+Everything else stays in: `tree_8` trunks, garden tables, bins, lamps and the
+power-line poles.
+
+**park's 16 benches are not obstacles at all.** Their collision meshes sit
+entirely 0.5 m *below* the terrain surface, so they are invisible to lidar and
+to physics and the robot drives through them. True of the original world too.
+They will not appear in the prior map regardless of the height band, and that
+is correct — the map matches what the lidar can see.
 
 **Height band.** Keep triangles whose z-range intersects `[GROUND_Z + 0.10, GROUND_Z + 1.20]`. This drops the terrain and path surfaces at the bottom and tree canopy at the top without special-casing them, leaving trunks, benches, bins, lamps and poles.
 
@@ -581,6 +637,39 @@ def test_obstacles_mark_a_known_tree_and_leave_the_spawn_clear():
     assert (win == 255).all(), "spawn is not clear in the prior map"
 
 
+def test_small_trees_are_absent_from_the_prior_map():
+    """arbol4 is deliberately excluded so the LOCAL costmap must avoid it."""
+    img = rasterize_obstacles(SDF, GROUND_Z + 0.10, GROUND_Z + 1.20)
+    a = np.asarray(img)
+    for x, y in [(5.67, 4.58), (-20.98, 2.64), (44.51, -7.19)]:
+        c, r = world_to_pixel(x, y)
+        win = a[r - 20:r + 21, c - 20:c + 21]     # +/- 1.0 m
+        assert (win == 255).all(), f"arbol4 at ({x}, {y}) leaked into the prior map"
+
+
+def test_large_trees_are_present_in_the_prior_map():
+    """tree_8 is a 12.9 m specimen and stays in the map."""
+    from tools.sdf_geometry import models_using_mesh_dir
+    import xml.etree.ElementTree as ET
+    world = ET.parse(SDF).getroot().find("world")
+    pts = []
+    for m in world.findall("model"):
+        if any("tree_8" in (u.text or "") for u in m.iter("uri")):
+            pose = m.find("pose")
+            if pose is not None and pose.text:
+                v = [float(t) for t in pose.text.split()]
+                pts.append((v[0], v[1]))
+    assert len(pts) >= 20
+    img = rasterize_obstacles(SDF, GROUND_Z + 0.10, GROUND_Z + 1.20)
+    a = np.asarray(img)
+    marked = 0
+    for x, y in pts:
+        c, r = world_to_pixel(x, y)
+        if (a[r - 8:r + 9, c - 8:c + 9] == 0).any():
+            marked += 1
+    assert marked >= len(pts) * 0.8, f"only {marked}/{len(pts)} tree_8 trunks mapped"
+
+
 def test_obstacles_do_not_mark_the_ground():
     """The terrain and path are excluded by the height band, not by name;
     if the band is wrong the whole map fills in."""
@@ -635,7 +724,7 @@ import numpy as np
 import yaml
 from PIL import Image, ImageDraw
 
-from tools.sdf_geometry import world_triangles
+from tools.sdf_geometry import models_using_mesh_dir, world_triangles
 
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
@@ -649,6 +738,13 @@ GROUND_Z = 2.98891
 # Ground surfaces: excluded by name as well as by the height band, because
 # rasterizing 131k terrain triangles only to discard them wastes ~30 s.
 GROUND_MODELS = {"parque", "camino_parque"}
+
+# Small canopy trees (3.10 m across, 4.11 m tall) are deliberately kept OUT of
+# the prior map so the global planner routes through them and the local costmap
+# has to avoid them from live lidar. This is the obstacle-avoidance demo, and
+# it is an intentional divergence between the prior map and reality.
+# tree_8 (12.9 m specimens), tables, bins, lamps and poles all stay in.
+PRIOR_EXCLUDE_MESH_DIRS = {"arbol4"}
 
 FREE, OCCUPIED = 255, 0
 
@@ -671,12 +767,23 @@ def rasterize_keepout() -> Image.Image:
     return img
 
 
+def prior_skip_models(sdf_path: str) -> set[str]:
+    """Models left out of the prior map: ground surfaces plus small trees."""
+    skip = set(GROUND_MODELS)
+    for d in PRIOR_EXCLUDE_MESH_DIRS:
+        skip |= models_using_mesh_dir(sdf_path, d)
+    return skip
+
+
 def rasterize_obstacles(sdf_path: str, z_lo: float, z_hi: float) -> Image.Image:
     """Black where collision geometry intersects the [z_lo, z_hi] band."""
     img = Image.new("L", SIZE, FREE)
     draw = ImageDraw.Draw(img)
+    skip = prior_skip_models(sdf_path)
+    print(f"    excluded from prior map: {len(skip) - len(GROUND_MODELS)} small trees "
+          f"+ {len(GROUND_MODELS)} ground surfaces")
     total = kept = 0
-    for name, T in world_triangles(sdf_path, skip_models=GROUND_MODELS):
+    for name, T in world_triangles(sdf_path, skip_models=skip):
         if len(T) == 0:
             continue
         total += len(T)
@@ -733,10 +840,10 @@ if __name__ == "__main__":
 - [ ] **Step 4: Run the tests and verify they pass**
 
 ```bash
-cd /home/thinhpham/Documents/Husky_viz && python3 -m pytest tests/test_generate_park_maps.py -v
+cd /home/thinhpham/Documents/Husky_viz && cd /home/thinhpham/Documents/Husky_viz && python3 -m pytest tests/test_generate_park_maps.py -v
 ```
 
-Expected: 6 passed. If `test_obstacles_do_not_mark_the_ground` fails with a high occupied fraction, the height band or the up-axis conversion from Task 1 is wrong.
+Expected: 8 passed. If `test_obstacles_do_not_mark_the_ground` fails with a high occupied fraction, the height band or the up-axis conversion from Task 1 is wrong.
 
 - [ ] **Step 5: Generate the committed maps**
 
@@ -759,7 +866,7 @@ for s in ('park_map','park_keepout'):
 "
 ```
 
-Open `/tmp/park_map_preview.png` and `/tmp/park_keepout_preview.png`. The obstacle map should show scattered blobs (trees, benches) in a band, not a solid fill and not an empty field. The keepout mask should be a white rectangle on black, wider than it is tall.
+Open `/tmp/park_map_preview.png` and `/tmp/park_keepout_preview.png`. The obstacle map should show scattered blobs (tree_8 trunks, tables, bins, lamps, poles), not a solid fill and not an empty field. The 15 `arbol4` positions must be **blank** — they are excluded on purpose. The keepout mask should be a white rectangle on black, wider than it is tall.
 
 - [ ] **Step 7: Commit**
 
@@ -778,7 +885,18 @@ of free space and actively clears. The void has to be asserted, not sensed.
 
 Obstacles are selected by a height band above ground rather than by model
 name, which excludes the terrain and path surfaces and the tree canopy
-without special-casing either."
+without special-casing either.
+
+The 15 arbol4 small canopy trees (3.10 m across, 4.11 m tall) are
+deliberately omitted so the global planner routes straight through them and
+the local costmap has to discover and avoid them from live lidar - the
+obstacle-avoidance demonstration. Selection is by mesh directory, not by
+name pattern, so it survives the world's _clone_N naming. tree_8 (12.9 m
+specimens), tables, bins, lamps and poles all stay in.
+
+Noted in passing: park's 16 benches sit entirely 0.5 m below the terrain
+surface, so they are invisible to lidar and physics and never appear in the
+map. True of the original world; not fixed here."
 ```
 
 ---
@@ -1301,6 +1419,14 @@ cp /opt/ros/jazzy/share/clearpath_nav2_demos/config/a200/nav2.yaml config/nav2_p
 
 The four deltas are listed in spec section 5.4. Costmap filters go in the costmap's `filters` list, which is **separate from `plugins`** — both parameter names are confirmed present in `libnav2_costmap_2d_core.so`, and `nav2_costmap_2d::KeepoutFilter` is registered as a `Layer` plugin.
 
+**Layer roles for the avoidance demo.** The prior map (static layer) omits the
+15 `arbol4` small trees on purpose, so the global planner will route straight
+through them. Keep Clearpath's `obstacle_layer` on the **global** costmap and
+the `voxel_layer` on the **local** costmap exactly as shipped: the local layer
+does the immediate avoidance, and the global layer lets the planner repair the
+route once the lidar has seen the tree. Removing either turns a graceful detour
+into repeated stalling.
+
 **Nav2 comes up healthy but useless if started before `map -> odom` exists.** No crash, no error, goals silently ignored. park's GPS is 1 Hz so the window is wide. Hence the staged launch and the readiness gate.
 
 **Open question, settle it first:** whether nav2 publishes `TwistStamped` on `cmd_vel`. Clearpath's config sets `enable_stamped_cmd_vel: true` on 13 nodes, and `nav2_util` 1.3.12 exposes only `validateTwist(const TwistStamped&)` — but that string is absent from the controller, velocity-smoother and collision-monitor libraries, so it could not be settled from the binaries. `check_nav2_ready.py` checks it directly. If it publishes plain `Twist`, stop and report: the fix is a small relay node, and it is far better known now than after a day of debugging a robot that reports success while never moving.
@@ -1380,7 +1506,7 @@ Then edit `config/nav2_park.yaml`:
 
 and set the inflation layer's `inflation_radius: 0.55`, `cost_scaling_factor: 3.0`.
 
-4. Leave everything else — MPPI, NavFn, smoother, behaviours, collision monitor, `odom_topic: platform/odom/filtered` — exactly as Clearpath ships it.
+4. Leave everything else — MPPI, NavFn, smoother, behaviours, collision monitor, `odom_topic: platform/odom/filtered` — exactly as Clearpath ships it. In particular **do not remove** the global costmap's `obstacle_layer` or the local costmap's `voxel_layer`; both are load-bearing for the small-tree avoidance demo.
 
 - [ ] **Step 3: Write the launch file**
 
@@ -1959,6 +2085,7 @@ original ROS 1 dataset, valid against park's datum of 49.9 N, 8.9 E."
 
 **Files:**
 - Create: `tools/check_map_alignment.py`
+- Create: `tools/check_local_avoidance.py`
 - Create: `NAV_PARK.md`
 - Modify: `scripts/kill_sim.sh`
 - Modify: `CLAUDE.md`
@@ -2087,7 +2214,114 @@ if __name__ == "__main__":
     sys.exit(main())
 ```
 
-- [ ] **Step 2: Add nav2 nodes to the kill pattern**
+- [ ] **Step 2: Write the local-avoidance check**
+
+This is the demonstration that the excluded small trees are actually being
+avoided by the local costmap rather than driven through.
+
+```python
+#!/usr/bin/env python3
+"""Prove the local costmap avoids a tree the prior map does not know about.
+
+The 15 arbol4 small trees are deliberately excluded from the prior map
+(tools/generate_park_maps.py), so the global planner routes straight through
+them. This sends a goal whose straight-line path passes through one, then
+measures the robot's closest approach while it drives.
+
+Success means: the goal was reached AND the robot never came closer to the
+tree than its radius plus a margin - i.e. it went around, not through.
+
+Usage:  python3 tools/check_local_avoidance.py
+"""
+
+import math
+import sys
+
+import rclpy
+from rclpy.node import Node
+from tf2_ros import Buffer, TransformListener
+
+from tools.nav_goal import GoalSender, make_pose
+
+# arbolpartes4_clone_2, from worlds/park.sdf. 3.10 m across -> 1.55 m radius.
+TREE = (5.67, 4.58)
+TREE_RADIUS = 1.55
+ROBOT_HALF_WIDTH = 0.34
+MIN_CLEARANCE = TREE_RADIUS + ROBOT_HALF_WIDTH        # 1.89 m
+
+# Chosen so the straight line from the spawn (45.64, 0.02) passes through TREE.
+GOAL = (-25.0, 8.08)
+
+
+class Tracker(Node):
+    def __init__(self) -> None:
+        super().__init__("check_local_avoidance")
+        self.buf = Buffer()
+        TransformListener(self.buf, self)
+        self.closest = float("inf")
+        self.samples = 0
+        self.create_timer(0.2, self._sample)
+
+    def _sample(self) -> None:
+        try:
+            tf = self.buf.lookup_transform("map", "base_link", rclpy.time.Time())
+        except Exception:
+            return
+        t = tf.transform.translation
+        d = math.hypot(t.x - TREE[0], t.y - TREE[1])
+        self.closest = min(self.closest, d)
+        self.samples += 1
+
+
+def main() -> int:
+    rclpy.init()
+    tracker = Tracker()
+    sender = GoalSender()
+
+    print(f"  unmapped tree at {TREE}, radius {TREE_RADIUS} m")
+    print(f"  goal {GOAL} - straight line from the spawn passes through it")
+    print(f"  required clearance: {MIN_CLEARANCE:.2f} m\n")
+
+    # Drive the goal on the sender while the tracker samples pose in parallel.
+    import threading
+    result = {}
+
+    def run() -> None:
+        result["rc"] = sender.send(make_pose(GOAL[0], GOAL[1], 0.0))
+
+    th = threading.Thread(target=run, daemon=True)
+    th.start()
+    while th.is_alive():
+        rclpy.spin_once(tracker, timeout_sec=0.2)
+    th.join()
+
+    rc = result.get("rc", 1)
+    print(f"\n  pose samples: {tracker.samples}")
+    print(f"  closest approach to the tree: {tracker.closest:.2f} m")
+
+    tracker.destroy_node()
+    sender.destroy_node()
+    rclpy.shutdown()
+
+    if tracker.samples < 10:
+        print("  FAIL: too few pose samples; did the robot move at all?")
+        return 1
+    if rc != 0:
+        print("  FAIL: navigation did not reach the goal")
+        return 1
+    if tracker.closest < MIN_CLEARANCE:
+        print(f"  FAIL: drove within {tracker.closest:.2f} m of the tree "
+              f"(need {MIN_CLEARANCE:.2f} m) - it was not avoided")
+        return 1
+    print("  PASS: goal reached and the unmapped tree was avoided")
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())
+```
+
+- [ ] **Step 3: Add nav2 nodes to the kill pattern**
 
 Per gotcha #21, `kill_sim.sh` verifies with the same pattern list it kills with, so it cannot detect what it does not kill — and that list has been incomplete twice already.
 
@@ -2098,7 +2332,7 @@ grep -n "static_transform_publisher\|pgrep" scripts/kill_sim.sh | head
 
 Add these to the pattern: `controller_server`, `planner_server`, `bt_navigator`, `behavior_server`, `waypoint_follower`, `velocity_smoother`, `collision_monitor`, `smoother_server`, `map_server`, `costmap_filter_info_server`, `lifecycle_manager`, `navsat_transform_node`, `ekf_node_map`.
 
-- [ ] **Step 3: Verify the kill list independently**
+- [ ] **Step 4: Verify the kill list independently**
 
 ```bash
 cd /home/thinhpham/Documents/Husky_viz
@@ -2111,7 +2345,7 @@ ls /dev/shm/ | grep -c fastrtps || echo 0
 
 Expected: no `a200_0000` or nav2 processes; shm count 0 (re-read once if nonzero — per gotcha #12 a transient count clears on its own).
 
-- [ ] **Step 4: Run the acceptance test**
+- [ ] **Step 5: Run the acceptance test**
 
 Full cold start through the `sim-operator` agent ("Restart the park world"), then:
 
@@ -2134,8 +2368,17 @@ Acceptance criteria, all four required:
    ```
 3. Robot still on the terrain — z close to 3.1, not a large negative number (gotcha #25).
 4. No collision: the robot's path did not pass through a mapped obstacle. Confirm visually in RViz or by re-running `check_map_alignment.py`.
+5. **Local avoidance demonstrated:**
+   ```bash
+   python3 tools/check_local_avoidance.py
+   ```
+   Expected: `PASS: goal reached and the unmapped tree was avoided`. This is the
+   criterion that proves the excluded small trees are handled by the local
+   costmap rather than driven through. If it reports a clearance below 1.89 m,
+   the local `voxel_layer` is not seeing the tree — check that the 2D lidar is
+   publishing and that the local costmap's observation source is unchanged.
 
-- [ ] **Step 5: Write the runbook**
+- [ ] **Step 6: Write the runbook**
 
 Create `NAV_PARK.md` in the style of `RUN_SIM.md` — numbered steps, no explanation, one verified gate per step:
 
@@ -2177,9 +2420,14 @@ Gate: exit code 0.
 ## Step 7 - confirm arrival
     gz model -m a200_0000/robot -p | head -3
 Gate: position within 0.5 m of the goal; z near 3.1, not large negative.
+
+## Step 8 - demonstrate local obstacle avoidance
+    python3 tools/check_local_avoidance.py
+Gate: prints `PASS`. Drives at a small tree the prior map omits and
+measures the closest approach; must stay above 1.89 m.
 ```
 
-- [ ] **Step 6: Update CLAUDE.md**
+- [ ] **Step 7: Update CLAUDE.md**
 
 Add to the "where new things go" table:
 
@@ -2195,14 +2443,16 @@ Add these gotchas:
 
 - **Nav2 comes up healthy but useless if started before `map -> odom` exists.** No crash, no error, goals silently ignored. park's GPS is 1 Hz so the window is wide. Always gate with `tools/check_nav2_ready.py`.
 - **COLLADA up-axis is mixed in this dataset.** `arbol4/*` and `bench/*` are `Y_UP`; the rest `Z_UP`. A loader that ignores it puts 31 of 97 models on their side, and the resulting map looks plausible.
+- **The prior map deliberately omits the 15 `arbol4` small trees** (3.10 m across, 4.11 m tall) so the local costmap has to avoid them from live lidar. A tree missing from `maps/park_map.pgm` is intended, not a generator bug. `tree_8` (12.9 m) and all man-made objects are mapped.
+- **park's 16 benches sit entirely 0.5 m below the terrain surface.** They are invisible to lidar and to physics, and the robot drives straight through them. True of the original ROS 1 world too.
 - **The keepout mask is the only thing stopping nav2 planning off the terrain.** A lidar ray past the edge returns max range, which the costmap reads as free space and actively clears. The void cannot be sensed.
 - **park's datum changed on 2026-08-26** from Rio to the source dataset's 49.9 N, 8.9 E. Any recorded GPS fix from before that date is invalid. Warehouse worlds still use Rio.
 
-- [ ] **Step 7: Commit**
+- [ ] **Step 8: Commit**
 
 ```bash
 cd /home/thinhpham/Documents/Husky_viz
-git add tools/check_map_alignment.py NAV_PARK.md scripts/kill_sim.sh CLAUDE.md
+git add tools/check_map_alignment.py tools/check_local_avoidance.py NAV_PARK.md scripts/kill_sim.sh CLAUDE.md
 git commit -m "feat(nav): add map alignment check, runbook and project docs
 
 check_map_alignment.py measures agreement between the generated prior map and
@@ -2213,6 +2463,11 @@ place.
 kill_sim.sh gains the nav2 node names. Per gotcha #21 that list verifies with
 the same pattern it kills with, so an omission is invisible; verified here
 with an independent sweep instead.
+
+check_local_avoidance.py drives at one of the 15 arbol4 small trees that the
+prior map deliberately omits and measures the closest approach, so the
+obstacle-avoidance behaviour is a measured number rather than an impression
+from watching RViz.
 
 NAV_PARK.md follows RUN_SIM.md's shape: numbered steps, no explanation, one
 gate each, so the sim-operator agent can run it without improvising.
