@@ -14,7 +14,11 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import math
 import os
+import sys
+
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import numpy as np
 import yaml
@@ -47,8 +51,12 @@ FREE, OCCUPIED = 255, 0
 
 def world_to_pixel(x: float, y: float) -> tuple[int, int]:
     """World metres -> (col, row). Row 0 is the TOP of the image."""
-    col = int(round((x - ORIGIN[0]) / RES))
-    row = SIZE[1] - 1 - int(round((y - ORIGIN[1]) / RES))
+    # floor, not round: nav2's map_server treats cell n as covering
+    # [origin + n*res, origin + (n+1)*res). The epsilon absorbs float noise
+    # like (1.0 - -31.55) / 0.05 == 650.9999999999999 without shifting the
+    # convention to round-to-nearest (which would introduce a half-cell offset).
+    col = int(math.floor((x - ORIGIN[0]) / RES + 1e-9))
+    row = SIZE[1] - 1 - int(math.floor((y - ORIGIN[1]) / RES + 1e-9))
     return col, row
 
 
