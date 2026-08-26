@@ -90,25 +90,89 @@ Spawn (`scripts/run_husky_sim.sh`): `x=45.64 y=0.02 z=3.3 yaw=2.6132`.
 That is **4.36 m from the x=+50 edge**. Distance to the other edges:
 95.64 m (x=-50), 23.43 m (y=+23.45), 26.57 m (y=-26.55).
 
-park declares (`worlds/park.sdf` lines 60-67):
+park currently declares (`worlds/park.sdf` lines 60-67):
 `EARTH_WGS84`, `world_frame_orientation ENU`, `latitude_deg -22.986687`,
 `longitude_deg -43.202501`, `elevation 0`, `heading_deg 0`.
+Both the datum and `heading_deg` change under section 3.
 
 Per CLAUDE.md gotcha #25, park has **no ground plane** — the terrain mesh is
 the only surface.
 
+### Source dataset ground truth — `park_1.bag`
+
+The original ROS 1 dataset
+(`.../Husky_viz/bag files/park_1_bag/park_1.bag`, 44.6 GB, 37 topics) was
+parsed via its index — chunk seeks only, never a full scan — and settles the
+orientation question empirically. It records the **same world** (`parque`,
+`camino_parque` in `/gazebo/model_states`) at the **same spawn**
+(`x=45.632 y=0.014`, matching `SPAWN_X/Y`).
+
+Because it logs `/gazebo/model_states` (ground-truth pose) and `/navsat/fix`
+(GPS) together, the world-to-geographic mapping is measurable rather than
+inferred. Least-squares fit over 120 time-paired samples:
+
+| relation | slope | max residual |
+|---|---|---|
+| **North vs x** | **+1.0008** | **0.001 m** |
+| **East vs y** | **-0.9978** | **0.001 m** |
+| North vs y | -13.7 | 6.6 m (no relation) |
+| East vs x | +0.046 | 0.5 m (no relation) |
+
+So the source world maps **+x -> North** and **+y -> West**, one to one, with
+the datum at world origin `(0,0)`. The 0.2 % from unity is a spherical vs
+ellipsoidal earth-radius constant in the analysis, not a real skew.
+
+**Why the source behaves this way:** its GPS topic is `/navsat/fix` carrying
+`dynamic_reconfigure` parameters, i.e. **`hector_gazebo_plugins`**, not Gazebo's
+built-in sensor. Hector derives latitude from `+x` and longitude from `-y` by
+default — a north-west-up convention. Gazebo Harmonic's `NavSat` uses ENU, where
+`heading_deg 0` yields `+x = East`. The `heading_deg` change in section 3 is
+therefore what **reproduces the source dataset**, not a preference.
+
+**Source datum: `49.9 N, 8.9 E`** (Darmstadt), at world origin.
+
+#### Recorded route — 5 waypoints
+
+`/navigation/objetive_gps` (`std_msgs/Float64MultiArray`, 8 identical messages,
+layout `numero_puntos` x `numero_coordenadas`) carries 5 unique lat/lon
+waypoints. Converted with the mapping above:
+
+| WP | lat | lon | x (N) | y (W) | leg | bearing |
+|---|---|---|---|---|---|---|
+| 1 | 49.900343910 | 8.899982657 | 38.28 | 1.24 | 7.5 m | 189 deg |
+| 2 | 49.900243609 | 8.899984660 | 27.12 | 1.10 | 11.2 m | 179 deg |
+| 3 | 49.900010387 | 8.900033366 | 1.16 | -2.39 | 26.2 m | 172 deg |
+| 4 | 49.899856529 | 8.900046400 | -15.97 | -3.33 | 17.2 m | 177 deg |
+| 5 | 49.899723284 | 8.900048049 | -30.80 | -3.45 | 14.8 m | 180 deg |
+
+From the spawn the route runs **76.4 m south** to `(-30.80, -3.45)`, every leg
+between 172 and 189 degrees, all five points inside the terrain. This is the
+project's reference route: it validates the orientation, seeds
+`routes/park_route_1.yaml`, and supplies the acceptance test goal.
+
 ---
 
-## 3. Map orientation change
+## 3. Map orientation and datum
 
 **Decision:** the map edge nearest the spawn is defined as **north**, which
-makes the robot's spawn heading **southwest**.
+makes the robot's spawn heading **southwest**. Confirmed against the source
+dataset (section 2): `+x -> North`, `+y -> West`, fit to 1 mm.
 
-Implemented as a one-line change in `worlds/park.sdf`:
+**Decision:** park's datum moves to the source dataset's origin so the recorded
+lat/lon waypoints are directly usable.
+
+Two changes in `worlds/park.sdf`:
 
 ```xml
-<heading_deg>90</heading_deg>   <!-- was 0; sign to be verified empirically -->
+<latitude_deg>49.9</latitude_deg>     <!-- was -22.986687 (Rio) -->
+<longitude_deg>8.9</longitude_deg>    <!-- was -43.202501 -->
+<heading_deg>90</heading_deg>         <!-- was 0; value verified against section 2 -->
 ```
+
+The datum change invalidates the Rio GPS fix recorded in CLAUDE.md and makes
+park diverge from the warehouse worlds, which keep Rio. Accepted deliberately:
+matching the source keeps the port faithful and makes `park_1.bag` usable as
+ground truth.
 
 ### What this does and does not change
 
@@ -147,9 +211,14 @@ With `+x = North`, `+y` becomes **West**:
 
 The SDF 1.10 spec for `heading_deg` is self-contradictory: it says "positive
 angle indicates clockwise rotation (from east to north)", but east-to-north is
-counter-clockwise. **90 vs -90 must be settled by running it**, not by reading
-docs. Drive the robot in +x and observe whether latitude or longitude changes,
-and in which direction.
+counter-clockwise, so the correct value cannot be read off the docs.
+
+**The target is no longer in doubt** — section 2 fixes it to `+x -> North`,
+`+y -> West` from 120 ground-truth samples. What remains is confirming which
+`heading_deg` value produces that in Harmonic's `NavSat`. Set 90, drive +x, and
+check that latitude increases 1:1 and longitude is unchanged; if it inverts, use
+-90. This is now a one-command validation against a known answer, not an
+open question.
 
 Rotating the world frame also rotates what the IMU calls zero heading, so
 `navsat_transform`'s `yaw_offset` must move by the same 90 deg. If the two
@@ -249,7 +318,7 @@ Two nodes.
 ```yaml
 use_local_cartesian: true
 wait_for_datum: true
-datum: [-22.986687, -43.202501, 0.0]    # verbatim from park.sdf
+datum: [49.9, 8.9, 0.0]                  # matches park.sdf and park_1.bag
 yaw_offset: 1.5708                       # matched to heading_deg 90; verify sign
 magnetic_declination_radians: 0.0        # no magnetometer in park
 use_odometry_yaw: false                  # heading from IMU orientation
@@ -438,7 +507,9 @@ proves.
 ### Acceptance test
 
 From the standard spawn (`45.64, 0.02`, yaw `2.6132` — 4.4 m inside the north
-edge, heading southwest), send a goal ~40 m south down the park. The robot must:
+edge, heading southwest), send the **recorded route's final waypoint**
+(`49.899723284, 8.900048049` = `x -30.80, y -3.45`), 76.4 m south. The robot
+must:
 
 - arrive within **0.5 m** of the goal
 - collide with nothing
@@ -466,15 +537,16 @@ agent without improvising.
 | `tools/nav_goal.py` | goal by map x/y/yaw |
 | `tools/nav_goal_ll.py` | goal by lat/lon via `fromLL` |
 | `tools/nav_route.py` | waypoint sequence from a file |
+| `routes/park_route_1.yaml` | the 5 recorded waypoints from `park_1.bag` |
 | `tools/check_nav2_ready.py` | readiness gate, one-shot |
 | `tools/check_map_alignment.py` | map vs lidar agreement |
 | `tools/check_nav_goal.py` | end-to-end goal test |
 | `NAV_PARK.md` | runbook |
-| `worlds/park.sdf` | **modified:** `heading_deg` only |
+| `worlds/park.sdf` | **modified:** `heading_deg` and datum (lat/lon) only |
 | `scripts/kill_sim.sh` | **modified:** nav2 nodes added to the pattern list |
 | `CLAUDE.md` | **modified:** `config/` and `maps/` rows added to the layout table; orientation and GPS notes |
 
-`config/` and `maps/` are new top-level directories. Config deliberately does
+`config/`, `maps/` and `routes/` are new top-level directories. Config deliberately does
 **not** go in `robot_configs/`, which has a specific meaning in this project
 (Clearpath robot descriptions consumed by `apply_config.sh`). Nav2 tuning files
 are not that.
@@ -487,8 +559,9 @@ are not that.
    downstream needs it. Also the piece most likely to hide a subtle error — a
    wrong mesh scale produces a map that looks fine until the robot hits a tree —
    so it must be trustworthy before anything is debugged on top of it.
-2. **`heading_deg` sign verification** and the GPS localization layer, verified
-   by `map -> odom` existing and being sane.
+2. **`heading_deg` + datum change**, validated against section 2's mapping
+   (drive +x, latitude must increase 1:1), then the GPS localization layer,
+   verified by `map -> odom` existing and being sane.
 3. **Nav2 + keepout filter**, verified by the cmd_vel check (6.1) and a short goal.
 4. **The four goal front ends.**
 5. **Acceptance test** (section 7).
