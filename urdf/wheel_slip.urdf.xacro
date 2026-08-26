@@ -1,0 +1,74 @@
+<?xml version="1.0"?>
+<!--
+  Wheel contact model override for the A200 outdoor wheels.
+
+  Goal: reproduce the ROS 1 Husky contact behaviour, which did not slide
+  laterally on sloped terrain. Source of every number below:
+  /home/thinhpham/Documents/natural_environments_ros_opt/husky/husky_description/urdf/wheel.urdf.xacro
+  which sets, per wheel link, mu1=1.0 mu2=1.0 kp=1e7 kd=1.0 fdir1="1 0 0"
+  and - crucially - declares no slip model whatsoever.
+
+  Two independent things are overridden:
+
+  1. Slip compliance -> 0.0 on BOTH axes.
+     Clearpath's outdoor.urdf.xacro emits one WheelSlip plugin instance per
+     wheel with lateral = longitudinal = 1.0, tuned for flat indoor floors.
+     Because this file is included from extras.urdf.xacro (after the a200
+     macro), the instances below are declared later in the SDF, run later in
+     PreUpdate, and are the last to write SlipComplianceCmd each step - so
+     they win.
+     0.0 is used rather than a small epsilon because 0.0 is exactly DART's
+     no-slip value (DART_DEFAULT_SLIP_COMPLIANCE = 0.0 in
+     /opt/ros/jazzy/opt/gz_dartsim_vendor/include/dart/constraint/ContactSurface.hpp:55),
+     i.e. the contact a link with no WheelSlip plugin gets - which is what
+     ROS 1 had. The gz-sim WheelSlip system applies the value by plain
+     multiplication with no branch on zero, so 0.0 is passed through and
+     cannot be reinterpreted as "unset".
+
+  2. The legacy gazebo_ros surface tags from the ROS 1 file, verbatim.
+     Verified with `gz sdf -p` that sdformat's URDF converter still
+     translates these into <surface><friction><ode><mu>/<mu2>/<fdir1> and
+     <surface><contact><ode><kp>/<kd> under Gazebo Harmonic - they are not
+     silently dropped. Note that DART honours mu/mu2/fdir1 but has no
+     contact stiffness/damping model, so kp/kd are inert here; they are kept
+     for fidelity with the ROS 1 source and in case the engine is switched.
+-->
+<robot xmlns:xacro="http://ros.org/wiki/xacro" name="a200_wheel_slip_override">
+  <xacro:property name="wheel_slip_compliance_lateral" value="0.0" />
+  <xacro:property name="wheel_slip_compliance_longitudinal" value="0.0" />
+  <xacro:property name="wheel_slip_normal_force" value="113" />
+  <xacro:property name="wheel_slip_wheel_radius" value="0.1651" />
+
+  <!-- ROS 1 husky_description/urdf/wheel.urdf.xacro surface parameters -->
+  <xacro:property name="wheel_contact_mu1" value="1.0" />
+  <xacro:property name="wheel_contact_mu2" value="1.0" />
+  <xacro:property name="wheel_contact_kp" value="10000000.0" />
+  <xacro:property name="wheel_contact_kd" value="1.0" />
+  <xacro:property name="wheel_contact_fdir1" value="1 0 0" />
+
+  <xacro:macro name="a200_wheel_slip_override" params="prefix">
+    <gazebo>
+      <plugin filename="libgz-sim-wheel-slip-system.so" name="gz::sim::systems::WheelSlip">
+        <wheel link_name="${prefix}_wheel_link">
+          <slip_compliance_lateral>${wheel_slip_compliance_lateral}</slip_compliance_lateral>
+          <slip_compliance_longitudinal>${wheel_slip_compliance_longitudinal}</slip_compliance_longitudinal>
+          <wheel_normal_force>${wheel_slip_normal_force}</wheel_normal_force>
+          <wheel_radius>${wheel_slip_wheel_radius}</wheel_radius>
+        </wheel>
+      </plugin>
+    </gazebo>
+
+    <gazebo reference="${prefix}_wheel_link">
+      <mu1 value="${wheel_contact_mu1}"/>
+      <mu2 value="${wheel_contact_mu2}"/>
+      <kp value="${wheel_contact_kp}"/>
+      <kd value="${wheel_contact_kd}"/>
+      <fdir1 value="${wheel_contact_fdir1}"/>
+    </gazebo>
+  </xacro:macro>
+
+  <xacro:a200_wheel_slip_override prefix="front_left" />
+  <xacro:a200_wheel_slip_override prefix="front_right" />
+  <xacro:a200_wheel_slip_override prefix="rear_left" />
+  <xacro:a200_wheel_slip_override prefix="rear_right" />
+</robot>

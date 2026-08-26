@@ -1,0 +1,32 @@
+<?xml version="1.0"?>
+<!-- Magnetometer / compass for the A200. Clearpath 2.9.x ships no magnetometer
+     model, so it is added here through platform.extras.urdf.
+     Mounted axis-aligned with base_link (no rotation), matching imu_0. -->
+<robot xmlns:xacro="http://ros.org/wiki/xacro">
+  <link name="compass_0_link">
+    <inertial>
+      <origin xyz="0 0 0" rpy="0 0 0"/>
+      <mass value="0.01"/>
+      <inertia ixx="1e-6" ixy="0.0" ixz="0.0" iyy="1e-6" iyz="0.0" izz="1e-6"/>
+    </inertial>
+    <visual>
+      <geometry><box size="0.015 0.015 0.004"/></geometry>
+    </visual>
+  </link>
+
+  <joint name="compass_0_joint" type="fixed">
+    <origin xyz="0 0 0.01" rpy="0 0 0"/>
+    <parent link="base_link"/>
+    <child link="compass_0_link"/>
+  </joint>
+
+  <gazebo reference="compass_0_link">
+    <sensor name="compass_0" type="magnetometer">
+      <always_on>true</always_on>
+      <update_rate>50</update_rate>
+      <gz_frame_id>compass_0_link</gz_frame_id>
+      <topic>$(arg namespace)/sensors/compass_0/mag</topic>
+      <magnetometer/>
+    </sensor>
+  </gazebo>
+</robot>

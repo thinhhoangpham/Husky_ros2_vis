@@ -1,0 +1,7 @@
+<?xml version="1.0"?>
+<!-- Aggregates all robot.yaml platform.extras.urdf additions. -->
+<robot xmlns:xacro="http://ros.org/wiki/xacro">
+  <xacro:include filename="/home/thinhpham/Documents/Husky_viz/urdf/compass.urdf.xacro"/>
+  <xacro:include filename="/home/thinhpham/Documents/Husky_viz/urdf/comms.urdf.xacro"/>
+  <xacro:include filename="/home/thinhpham/Documents/Husky_viz/urdf/wheel_slip.urdf.xacro"/>
+</robot>

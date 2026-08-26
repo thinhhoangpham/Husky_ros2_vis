@@ -1,0 +1,38 @@
+# Mesh and texture assets — 2.4 GB on disk. Shipped separately as
+# husky_viz_models.zip rather than committed: seven files exceed GitHub's
+# 100 MB per-file limit, and git cannot delta-compress binaries.
+#
+# The zip is the only copy of two files that are NOT in the upstream asset
+# packs and cannot be recovered by re-copying them:
+#   models/tree_8/bark8_collision.obj                    repaired vertex normals
+#   models/terreno_lago/materials/textures/lago_textura.jpg   8192² RGB conversion
+# Without the first, DART segfaults on the tree collision mesh; without the
+# second, lake's terrain renders untextured. Keep the zip.
+#
+# For reference, 2.2 GB of the 2.4 GB is referenced by nothing — full-res
+# variants superseded by _lowpoly, a Blender source file Gazebo cannot read,
+# and the pre-conversion PNG texture. Verified against worlds/park.sdf and
+# worlds/lake.sdf including the .mtl texture chain, 2026-08-26:
+#   models/terreno_lago/lago_entero.dae                  342 MB
+#   models/tree_8/uploads_files_2812146_...AcerNikoense_8.blend  308 MB
+#   models/terreno_parque/terreno_parque.dae             290 MB
+#   models/terreno_lago/lago.dae                         243 MB
+#   models/terreno_lago/lago_1.dae                       219 MB
+#   models/terreno_lago/lago_2.dae                       216 MB
+#   models/terreno_lago/materials/textures/lago_textura.png      125 MB
+#   models/camino_parque/camino_parque.dae                81 MB
+models/
+
+# Manual backups from editing sessions. Git supersedes these.
+*.bak
+*.bak-*
+*.bak[0-9]*
+
+# macOS resource forks that ride along with the asset packs
+._*
+.DS_Store
+
+# Local scratch
+*.log
+__pycache__/
+*.pyc
