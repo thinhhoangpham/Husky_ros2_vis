@@ -1,0 +1,15 @@
+# routes/park_route_1.yaml
+#
+# The five waypoints recorded on /navigation/objetive_gps in the original
+# ROS 1 dataset (park_1.bag), verbatim. Valid only against park's datum of
+# 49.9 N, 8.9 E - see worlds/park.sdf.
+#
+# The route runs 76.4 m south from the spawn, down the long axis of the park.
+# world x/y are informational; the lat/lon values are authoritative.
+frame: latlon
+waypoints:
+  - {lat: 49.9003439105, lon: 8.89998265669}   # x  38.28  y  1.24
+  - {lat: 49.9002436091, lon: 8.89998465971}   # x  27.12  y  1.10
+  - {lat: 49.9000103866, lon: 8.90003336643}   # x   1.16  y -2.39
+  - {lat: 49.8998565290, lon: 8.90004639993}   # x -15.97  y -3.33
+  - {lat: 49.8997232844, lon: 8.90004804940}   # x -30.80  y -3.45
