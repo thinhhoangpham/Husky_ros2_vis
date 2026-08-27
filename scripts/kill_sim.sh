@@ -26,6 +26,24 @@ PATTERNS=(
   "urg_node"
   "velodyne"
   "rviz2"
+  # nav2 + GPS localization stack (launch/nav_park.launch.py) - see CLAUDE.md #21
+  "navsat_transform_node"
+  "ekf_node_map"
+  "gps_covariance_relay"
+  "controller_server"
+  "planner_server"
+  "smoother_server"
+  "route_server"
+  "behavior_server"
+  "bt_navigator"
+  "waypoint_follower"
+  "velocity_smoother"
+  "collision_monitor"
+  "docking_server"
+  "map_server"
+  "filter_mask_server"
+  "costmap_filter_info_server"
+  "lifecycle_manager"
 )
 
 SELF=$$

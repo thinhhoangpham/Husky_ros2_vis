@@ -26,6 +26,9 @@ Husky_viz/
 | a launch file | `launch/` | |
 | a shell entry point | `scripts/` | `chmod +x` |
 | a check/verification script | `tools/check_<what>.py` | name it after what it proves |
+| a nav2 / localization config | `config/` | not `robot_configs/`, which is Clearpath robot descriptions |
+| a generated map or mask | `maps/` | regenerate with `tools/generate_park_maps.py` |
+| a waypoint route | `routes/` | lat/lon valid only against the world's datum |
 | generated URDF/params/launch | nowhere — they land in `~/clearpath/` | **never edit or commit these** |
 
 `~/clearpath/` holds `robot.yaml` (a deployed copy) plus generated
@@ -69,6 +72,7 @@ a step fails, fix the file rather than working around it.**
 |---|---|---|
 | `CLEAN_SIM.md` | kill survivors, clear `/dev/shm`, verify clean | `husky-sim-restart` |
 | `RUN_SIM.md` | launch, verify topics, verify the robot landed | `husky-run-sim` |
+| `NAV_PARK.md` | launch nav2 + GPS localization in park, send a goal, verify arrival and local avoidance | — |
 | `DEMO.md` | demo scenarios, one self-contained block each | — |
 
 `CLEAN_SIM.md` runs first and must report `opt/ros : 0` / `shm : 0` before
@@ -178,8 +182,12 @@ placements come from each source world's `<state>` block (gotcha #16), verbatim.
 | models | 97 | 79 |
 | ground z | ≈2.99 (flat) | 3.5–5.9 (relief 2.43 m, max slope 21°) |
 | spawn (x y z yaw) | `45.64 0.02 3.3 2.6132` | `-47 -15 4.0 0` |
-| datum | Rio (user choice) | lat/lon 0 (source) |
+| datum | 49.9 N, 8.9 E, `heading_deg` 90 (source dataset, since 2026-08-26) | lat/lon 0 (source) |
+| orientation | +x North, +y West; spawn 4.36 m inside the north edge heading southwest, ~95 m of run south | — |
 | compass/radio | **no** | **no** |
+
+park's datum was Rio (user choice) before 2026-08-26; any GPS fix recorded
+before that date is invalid against the current world. lake still uses Rio.
 
 Neither carries `Magnetometer`/`RFComms`, so `robot_full.yaml`'s compass and
 radio are silent there; every other sensor works. Only `warehouse_ext` /
@@ -461,6 +469,65 @@ teleports the robot has `warehouse` baked in, and per gotcha #4 `set_pose`
 returns `data: true` regardless — so those tools silently no-op in the ported
 worlds rather than erroring. Parameterise the world name before trusting a
 teleport-based check outside warehouse.
+
+**27. The controller spawner race can fail outright, not just be slow, and
+at either controller.** Activation was measured at **4.59 s** against a hard
+**5.00 s** switch timeout, so it fails roughly half the time and presents as
+a robot that will not move with every `RUN_SIM.md` gate green. Observed
+twice on 2026-08-26: once losing at `platform_velocity_controller`, once at
+`joint_state_broadcaster` before it ever reached the second controller.
+`RUN_SIM.md` Step 4 originally only checked `imu_0/data`, which is published
+straight from the Gazebo sensor and is structurally blind to a dead
+controller spawner — a sim has passed every gate while
+`platform_velocity_controller` was absent and `/a200_0000/platform/odom` had
+zero publishers. Step 4 now also requires:
+```bash
+ros2 service call /a200_0000/controller_manager/list_controllers controller_manager_msgs/srv/ListControllers "{}"
+```
+with both `joint_state_broadcaster` and `platform_velocity_controller` state
+`active` (the `ros2 control` CLI is **not installed** on this machine, so the
+service call is the working form), plus
+`ros2 topic info -v /a200_0000/platform/odom` requiring `Publisher count: 1`.
+If that gate fails, `RUN_SIM.md`'s recovery step (re-running the spawner
+manually for both controllers with `--switch-timeout 30`) is **UNTESTED** —
+the failure has never been reproduced on demand.
+
+**28. The prior park map deliberately omits the 15 `arbol4` small trees**
+(3.10 m across, 4.11 m tall) so the local costmap has to avoid them from live
+lidar (`tools/generate_park_maps.py`). A tree missing from
+`maps/park_map.pgm` is intended, not a generator bug. `tree_8` (12.9 m) and
+all man-made objects are mapped.
+
+**29. park's 16 benches sit entirely ~0.5 m below the terrain surface.** They
+are invisible to lidar and to physics, and the robot drives straight through
+them. True of the original ROS 1 world too.
+
+**30. The keepout mask is the only thing stopping nav2 planning off the
+terrain.** A lidar ray past the edge returns max range, which the costmap
+reads as free space and actively *clears*. The void cannot be sensed (see
+gotcha #25 — neither ported world has a ground plane).
+
+**31. Nav2 costmap filter and static-layer topics must be absolute.**
+Relative names resolve inside the costmap node
+(`/a200_0000/global_costmap/...`) and silently never bind — the filter logs
+`Filter mask was not received` and the prior map is simply absent.
+
+**32. park's datum changed on 2026-08-26** from Rio to the source dataset's
+49.9 N, 8.9 E, and `heading_deg` is now 90, so +x is North and +y is West.
+Any GPS fix recorded before that date is invalid. The warehouse worlds still
+use Rio.
+
+**33. The `ros2 control` CLI is not installed on this machine.** Query
+controller state via the `controller_manager` service directly (see gotcha
+#27) rather than reaching for `ros2 control list_controllers`.
+
+**34. Nav2 comes up healthy but useless if started before `map -> odom`
+exists.** No crash, no error, goals silently ignored. park's GPS is 1 Hz so
+the window is wide. Always gate with `tools/check_nav2_ready.py`.
+
+**35. COLLADA up-axis is mixed in this dataset.** `arbol4/*` and `bench/*`
+are `Y_UP`; the rest are `Z_UP`. A loader that ignores it puts 31 of 97
+models on their side, and the resulting map still looks plausible.
 
 ## Sensor semantics (verified)
 

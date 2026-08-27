@@ -189,12 +189,15 @@ def _load_dae(path: str) -> tuple[np.ndarray, np.ndarray]:
     V = np.vstack(all_V) * unit
     F = np.vstack(all_F)
 
-    if up == "Y_UP":
-        # rotate +90 deg about X: (x, y, z) -> (x, -z, y)
-        V = np.column_stack([V[:, 0], -V[:, 2], V[:, 1]])
-    elif up == "X_UP":
-        # rotate -90 deg about Y: (x, y, z) -> (-y, x, z)
-        V = np.column_stack([-V[:, 1], V[:, 0], V[:, 2]])
+    # NOTE: deliberately NOT applying the COLLADA <up_axis> conversion.
+    # Gazebo/gz-sim does not apply it for these assets, and this loader must
+    # match what the simulator actually places in the world, not what the
+    # COLLADA spec says. Verified against linea1/postes_lowpoly.dae, which
+    # declares Y_UP: converting makes it 3.6 m tall and 16.5 m wide (a pylon
+    # lying on its side), while Gazebo renders it 16.5 m tall as authored.
+    # The same bug sank park's 16 benches below the terrain and flattened the
+    # power lines into 60 m walls across the prior map.
+    _ = up
     return V, F
 
 
@@ -254,6 +257,76 @@ def models_using_mesh_dir(sdf_path: str, dirname: str) -> set[str]:
     return out
 
 
+
+
+def _primitive_triangles(col: ET.Element) -> np.ndarray | None:
+    """Triangulate a <box>/<cylinder>/<sphere> collision, or None if it is a mesh.
+
+    park's water_tower is built from cylinder primitives rather than a mesh, and
+    a loader that only handles <mesh> drops it from the map entirely - it is a
+    2 m diameter column from the ground to 6 m with a 5 m tank above, i.e. one of
+    the largest obstacles in the world.
+    """
+    geom = col.find("geometry")
+    if geom is None:
+        return None
+    local = _pose_of(col.find("geometry")) if False else np.eye(4)
+    # the collision's own <pose> is applied by the caller; a primitive may also
+    # carry a pose on the collision element, already handled there.
+
+    def _emit(verts: np.ndarray, faces: list[tuple[int, int, int]]) -> np.ndarray:
+        return np.asarray([[verts[a], verts[b], verts[c]] for a, b, c in faces], dtype=np.float64)
+
+    box = geom.find("box")
+    if box is not None:
+        sz = box.find("size")
+        sx, sy, sz_ = ([float(v) for v in sz.text.split()] if sz is not None and sz.text
+                       else [1.0, 1.0, 1.0])
+        hx, hy, hz = sx / 2, sy / 2, sz_ / 2
+        V = np.array([[x, y, z] for x in (-hx, hx) for y in (-hy, hy) for z in (-hz, hz)])
+        F = [(0,1,3),(0,3,2),(4,6,7),(4,7,5),(0,4,5),(0,5,1),
+             (2,3,7),(2,7,6),(0,2,6),(0,6,4),(1,5,7),(1,7,3)]
+        return _emit(V, F)
+
+    cyl = geom.find("cylinder")
+    if cyl is not None:
+        r_el, l_el = cyl.find("radius"), cyl.find("length")
+        r = float(r_el.text) if r_el is not None and r_el.text else 1.0
+        L = float(l_el.text) if l_el is not None and l_el.text else 1.0
+        n = 24
+        ang = np.linspace(0.0, 2.0 * np.pi, n, endpoint=False)
+        ring = np.column_stack([r * np.cos(ang), r * np.sin(ang)])
+        bot = np.column_stack([ring, np.full(n, -L / 2)])
+        top = np.column_stack([ring, np.full(n, L / 2)])
+        V = np.vstack([bot, top, [[0, 0, -L / 2]], [[0, 0, L / 2]]])
+        cb, ct = 2 * n, 2 * n + 1
+        F = []
+        for i in range(n):
+            j = (i + 1) % n
+            F += [(i, j, n + j), (i, n + j, n + i), (cb, j, i), (ct, n + i, n + j)]
+        return _emit(V, F)
+
+    sph = geom.find("sphere")
+    if sph is not None:
+        r_el = sph.find("radius")
+        r = float(r_el.text) if r_el is not None and r_el.text else 1.0
+        u = np.linspace(0, 2 * np.pi, 16, endpoint=False)
+        v = np.linspace(-np.pi / 2, np.pi / 2, 9)
+        pts, F = [], []
+        for iv, vv in enumerate(v):
+            for iu, uu in enumerate(u):
+                pts.append([r*np.cos(vv)*np.cos(uu), r*np.cos(vv)*np.sin(uu), r*np.sin(vv)])
+        V = np.asarray(pts)
+        for iv in range(len(v) - 1):
+            for iu in range(len(u)):
+                a = iv*len(u)+iu; b = iv*len(u)+(iu+1) % len(u)
+                c = (iv+1)*len(u)+iu; d = (iv+1)*len(u)+(iu+1) % len(u)
+                F += [(a, b, d), (a, d, c)]
+        return _emit(V, F)
+
+    return None
+
+
 def world_triangles(sdf_path: str, skip_models: set[str]) -> Iterator[tuple[str, np.ndarray]]:
     """Yield (model_name, triangles) with triangles float64 (k, 3, 3) in world coords."""
     root = ET.parse(sdf_path).getroot()
@@ -272,6 +345,11 @@ def world_triangles(sdf_path: str, skip_models: set[str]) -> Iterator[tuple[str,
             M_link = M_model @ _pose_of(link)
             for col in link.findall("collision"):
                 M_col = M_link @ _pose_of(col)
+                prim = _primitive_triangles(col)
+                if prim is not None:
+                    H = np.hstack([prim.reshape(-1, 3), np.ones((prim.size // 3, 1))])
+                    chunks.append((H @ M_col.T)[:, :3].reshape(-1, 3, 3))
+                    continue
                 mesh_el = col.find("geometry/mesh")
                 if mesh_el is None:
                     continue

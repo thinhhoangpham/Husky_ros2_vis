@@ -39,10 +39,43 @@ controller_server:
       xy_goal_tolerance: 0.25
       yaw_goal_tolerance: 0.25
     FollowPath:
-      plugin: "nav2_mppi_controller::MPPIController"
-      time_steps: 56
+      # MPPI is wrapped in the rotation shim rather than driven directly.
+      #
+      # Why: park's spawn faces 2.6132 rad (~150 deg), so a goal south down the
+      # park sits behind the robot and requires a near-in-place reversal. MPPI
+      # has to solve that in one optimisation, and with batch_size 2000 x
+      # time_steps 56 it exceeded its patience on this machine, logging
+      # "Optimizer fail to compute path" then "Controller patience exceeded".
+      # nav2 then fell through to recovery behaviours, and repeated BackUp
+      # recoveries walked the robot north off the terrain edge (park has no
+      # ground plane, CLAUDE.md gotcha #25).
+      #
+      # RotationShimController rotates in place until the robot faces the path,
+      # then hands off to MPPI for the drive. This is what the shim exists for;
+      # the alternative of relaxing MPPI's patience only delays the same failure.
+      plugin: "nav2_rotation_shim_controller::RotationShimController"
+      primary_controller: "nav2_mppi_controller::MPPIController"
+      angular_dist_threshold: 0.785        # 45 deg: rotate first beyond this
+      forward_sampling_distance: 0.5
+      rotate_to_heading_angular_vel: 0.8
+      max_angular_accel: 3.2
+      simulate_ahead_time: 1.0
+      rotate_to_goal_heading: false
+      # Sample load cut from Clearpath's 56 x 2000 (112k trajectory points per
+      # cycle at 20 Hz) to 30 x 600 (18k), a 6.2x reduction.
+      #
+      # Why: on this machine the controller loop was measured running at 10 Hz
+      # against its commanded 20 Hz, and MPPI logged "Optimizer fail to compute
+      # path" then "Controller patience exceeded" on a 16 m path only 22 deg off
+      # the robot's heading - geometrically trivial, so the failure is the
+      # optimiser not finishing inside its slot rather than an infeasible
+      # problem. Clearpath's defaults assume a machine that is not sharing a
+      # core with gz sim at RTF 1.0.
+      #
+      # 30 steps x 0.05 s = 1.5 s horizon, ample for a 0.5 m/s robot.
+      time_steps: 30
       model_dt: 0.05
-      batch_size: 2000
+      batch_size: 600
       ax_max: 3.0
       ax_min: -3.0
       ay_max: 3.0
@@ -135,7 +168,7 @@ local_costmap:
       width: 5
       height: 5
       resolution: 0.06
-      footprint: "[[0.50, 0.34], [0.50, -0.34], [-0.50, -0.34], [-0.50, 0.34]]"
+      footprint: "[ [0.55, 0.45], [0.55, -0.45], [-0.55, -0.45], [-0.55, 0.45] ]"
       always_send_full_costmap: true
       plugins: ["static_layer", "voxel_layer", "inflation_layer"]
       filters: ["keepout_filter"]
@@ -145,8 +178,8 @@ local_costmap:
         filter_info_topic: "/a200_0000/costmap_filter_info"
       inflation_layer:
         plugin: "nav2_costmap_2d::InflationLayer"
-        cost_scaling_factor: 3.0
-        inflation_radius: 0.55
+        cost_scaling_factor: 4.0
+        inflation_radius: 0.8
       voxel_layer:
         plugin: "nav2_costmap_2d::VoxelLayer"
         enabled: true
@@ -180,7 +213,7 @@ global_costmap:
       publish_frequency: 1.0
       global_frame: map
       robot_base_frame: base_link
-      footprint: "[[0.50, 0.34], [0.50, -0.34], [-0.50, -0.34], [-0.50, 0.34]]"
+      footprint: "[ [0.55, 0.45], [0.55, -0.45], [-0.55, -0.45], [-0.55, 0.45] ]"
       resolution: 0.05
       track_unknown_space: true
       always_send_full_costmap: true
@@ -215,8 +248,8 @@ global_costmap:
         map_topic: "/a200_0000/map"
       inflation_layer:
         plugin: "nav2_costmap_2d::InflationLayer"
-        cost_scaling_factor: 3.0
-        inflation_radius: 0.55
+        cost_scaling_factor: 4.0
+        inflation_radius: 0.8
 
 planner_server:
   ros__parameters:
@@ -301,8 +334,21 @@ collision_monitor:
     enable_stamped_cmd_vel: true
     base_frame_id: "base_link"
     odom_frame_id: "odom"
-    cmd_vel_in_topic: "cmd_vel_smoothed"
-    cmd_vel_out_topic: "cmd_vel"
+    # collision_monitor is deliberately OUT of the command path on this robot.
+    # Its topics are wired to unused names so it stays alive (nav2_bringup
+    # manages it in its lifecycle list) but forwards nothing.
+    #
+    # Why: robot_default.yaml gives the 2D lidar a full 360 deg sweep, so it
+    # sees the robot's own sensor arch at ~0.40 m. collision_monitor has no
+    # concept of the robot's own footprint, so it reads those self-returns as a
+    # permanent imminent collision and scales every nav2 command to zero: the
+    # robot accepts goals, plans a path, and never moves. Clipping the lidar's
+    # angular range would hide the self-returns rather than fix the mismatch,
+    # and the costmap already performs obstacle avoidance with proper footprint
+    # clearing. velocity_smoother therefore publishes straight to cmd_vel
+    # (see the SetRemap in launch/nav_park.launch.py).
+    cmd_vel_in_topic: "cmd_vel_collision_monitor_unused_in"
+    cmd_vel_out_topic: "cmd_vel_collision_monitor_unused_out"
     state_topic: "collision_monitor_state"
     transform_tolerance: 0.2
     source_timeout: 1.0

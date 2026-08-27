@@ -45,6 +45,11 @@ GROUND_MODELS = {"parque", "camino_parque"}
 # it is an intentional divergence between the prior map and reality.
 # tree_8 (12.9 m specimens), tables, bins, lamps and poles all stay in.
 PRIOR_EXCLUDE_MESH_DIRS = {"arbol4"}
+# linea1 (power line) is excluded because the ported world places it far too low:
+# its geometry spans 0.55 m BELOW ground to only 3.05 m above, so the cables hang
+# at robot height and rasterise as 60 m walls across the park. In reality a power
+# line is overhead infrastructure the robot drives under. Faithful to the source
+# world, wrong as a ground obstacle.
 
 FREE, OCCUPIED = 255, 0
 
