@@ -1,0 +1,57 @@
+<?xml version="1.0"?>
+<!-- 2 Hz navsat GPS for the A200.
+
+     Clearpath's stock garmin_18x
+     (clearpath_sensors_description/urdf/garmin_18x.urdf.xacro) hardcodes
+     <update_rate>1</update_rate> and its macro takes only name/parent_link/
+     origin, so there is no way to raise the rate from robot_configs/ - the
+     generator never passes an update_rate to it (unlike microstrain_imu,
+     which does expose one). The vendor file must not be edited, so this
+     macro is a verbatim copy of it with the rate raised.
+
+     Rate is 2 Hz. The design spec (docs/superpowers/specs/
+     2026-08-26-park-localization-revision-design.md section 3.2) proposed
+     10 Hz; 2 Hz is the user's decision and overrides it.
+
+     No <noise> block here on purpose - the spec's declared-noise item is
+     separate work.
+
+     Naming is deliberate and must not drift: the link, sensor name and gz
+     <topic> match exactly what the stock gps_0 emitted, so the ROS side
+     stays /a200_0000/sensors/gps_0/fix (CLAUDE.md gotcha #15 - the gz topic
+     is .../sensors/gps_0/navsat, the bridge does the rename).
+
+     Not auto-bridged - see CLAUDE.md gotcha #7; the bridge line lives in
+     scripts/run_husky_sim.sh. -->
+<robot xmlns:xacro="http://www.ros.org/wiki/xacro">
+  <xacro:macro name="gps_2hz" params="name parent_link *origin">
+    <link name="${name}_link">
+      <visual>
+        <material name="clearpath_black"/>
+        <geometry>
+          <cylinder radius="0.0305" length="0.0195" />
+        </geometry>
+      </visual>
+      <collision>
+        <material name="clearpath_black"/>
+        <geometry>
+          <cylinder radius="0.0305" length="0.0195" />
+        </geometry>
+      </collision>
+    </link>
+    <joint name="${name}_joint" type="fixed">
+      <child link="${name}_link"/>
+      <parent link="${parent_link}"/>
+      <xacro:insert_block name="origin"/>
+    </joint>
+
+    <gazebo reference="${name}_link">
+      <sensor name="${name}" type="navsat">
+        <always_on>1</always_on>
+        <update_rate>2</update_rate>
+        <gz_frame_id>${name}_link</gz_frame_id>
+        <topic>$(arg namespace)/sensors/${name}/navsat</topic>
+      </sensor>
+    </gazebo>
+  </xacro:macro>
+</robot>

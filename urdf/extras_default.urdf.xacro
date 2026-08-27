@@ -4,4 +4,14 @@
 <robot xmlns:xacro="http://ros.org/wiki/xacro">
   <xacro:include filename="/home/thinhpham/Documents/Husky_viz/urdf/wheel_slip.urdf.xacro"/>
   <xacro:include filename="/home/thinhpham/Documents/Husky_viz/urdf/imu_enu.urdf.xacro"/>
+  <xacro:include filename="/home/thinhpham/Documents/Husky_viz/urdf/gps_2hz.urdf.xacro"/>
+
+  <!-- Replaces the stock garmin_18x gps_0, which is locked to 1 Hz (its macro
+       takes no update_rate and the generator passes none). Same name, same
+       mount as the removed robot_configs/ entry, so the ROS topic is
+       unchanged: /a200_0000/sensors/gps_0/fix. Because it is a custom sensor
+       the mount has to live here rather than in robot_configs/. -->
+  <xacro:gps_2hz name="gps_0" parent_link="sensor_arch_mount">
+    <origin xyz="0.0 0.15 0.0" rpy="0.0 0.0 0.0"/>
+  </xacro:gps_2hz>
 </robot>

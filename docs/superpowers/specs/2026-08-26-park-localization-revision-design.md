@@ -55,8 +55,8 @@ it is what gives the GPS-loss dead-reckoning fallback. What changes is that
 **every input arrives already in the frame and units the consumer expects.**
 
 ```
-                 urdf/imu_world.urdf.xacro          urdf/gps_10hz.urdf.xacro
-                 (one IMU, yaw in map frame)        (10 Hz, noise declared)
+                 urdf/imu_world.urdf.xacro          urdf/gps_2hz.urdf.xacro
+                 (one IMU, yaw in map frame)        (2 Hz, noise declared)
                           |                                   |
         +-----------------+-----------------+                 |
         v                                   v                 v
@@ -96,14 +96,15 @@ keeps the name `imu_0` and its topic, and is bridged by the explicit
 `ros_gz_bridge` line in `scripts/run_husky_sim.sh` (gotcha #7). Verify at
 launch that exactly one publisher exists on `sensors/imu_0/data`.
 
-### 3.2 GPS at 10 Hz with declared noise
+### 3.2 GPS at 2 Hz with declared noise
 
 Clearpath's `garmin_18x` / `swiftnav_duro` xacros hardcode `update_rate 1` and
-no `<noise>`. A custom `urdf/gps_10hz.urdf.xacro` (navsat, same mount as
+no `<noise>`. A custom `urdf/gps_2hz.urdf.xacro` (navsat, same mount as
 today) sets:
 
-- `update_rate 10` — the swiftnav/novatel class this models are 10–20 Hz
-  receivers; 1 Hz is a Garmin 18x quirk, not a property of GPS.
+- `update_rate 2` — **the user's decision (2026-08-26); it overrides this
+  document's original 10 Hz.** 1 Hz is a Garmin 18x quirk, not a property of
+  GPS, but 2 Hz is the rate to implement — do not raise it without asking.
 - `<noise type="gaussian"><stddev>` on horizontal position, value from the
   receiver class being modelled (0.5 m is a reasonable non-RTK figure; the
   exact number is a config value, not a design decision).
@@ -131,7 +132,7 @@ reason as §3.1.
 
 The 1.9 m in-motion error has a hypothesis (wheel-velocity integration between
 GPS fixes, possibly with wheel slip) but no measurement. §4.1 runs before any
-of §3.2–3.3's tuning. If 10 Hz GPS alone closes it, no EKF tuning happens.
+of §3.2–3.3's tuning. If 2 Hz GPS alone closes it, no EKF tuning happens.
 
 ---
 
@@ -193,7 +194,7 @@ something sensible.
 
 1. §4.1 drive check (measure the 1.9 m fault before touching it)
 2. §3.1 IMU probe -> custom IMU -> delete relay -> §4.1 must still pass
-3. §3.2 GPS 10 Hz -> covariance check -> delete relay if possible -> §4.1
+3. §3.2 GPS 2 Hz -> covariance check -> delete relay if possible -> §4.1
 4. §3.3 tuning only if §4.1 still fails
 5. §4.3 readiness replacement, §5 goal tooling
 6. §4.2 route acceptance, runbooks, gotchas

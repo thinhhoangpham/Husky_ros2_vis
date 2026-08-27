@@ -105,15 +105,10 @@ sensors:
         imu_frame_id: imu_0_link
         port: /dev/microstrain_main
         use_enu_frame: true
-  gps:
-  - model: garmin_18x          # navsat; needs a world with the NavSat
-    urdf_enabled: true         # system + <spherical_coordinates> (all
-    launch_enabled: true       # stock Clearpath worlds have both)
-    parent: sensor_arch_mount  # high up, offset clear of the 3D lidar
-    xyz: [0.0, 0.15, 0.0]
-    rpy: [0.0, 0.0, 0.0]
-    ros_parameters:
-      nmea_navsat_driver:
-        frame_id: gps_0_link
-        port: /dev/clearpath/gps
-        baud: 19200
+  # NOTE: gps_0 is NOT declared here. Clearpath's garmin_18x xacro hardcodes
+  # <update_rate>1</update_rate> and exposes no override, so the 2 Hz sensor
+  # is a custom xacro instead: urdf/gps_2hz.urdf.xacro, instantiated from
+  # urdf/extras_default.urdf.xacro with the same name (gps_0), mount
+  # (sensor_arch_mount, xyz 0.0 0.15 0.0) and gz topic. The ROS topic is
+  # unchanged: /a200_0000/sensors/gps_0/fix. Custom sensors are not
+  # auto-bridged (gotcha #7) - the bridge line is in scripts/run_husky_sim.sh.

@@ -107,17 +107,22 @@ ros2 launch /home/thinhpham/Documents/Husky_viz/launch/sim_compass.launch.py \
 LAUNCH_PID=$!
 
 # Clearpath's generator only bridges sensors it knows about, so the
-# magnetometer, the ENU-referenced IMU and the comms topics need their own
-# bridge (CLAUDE.md gotcha #7).
+# magnetometer, the ENU-referenced IMU, the 2 Hz GPS and the comms topics need
+# their own bridge (CLAUDE.md gotcha #7).
+# gps_0 publishes on the gz topic .../sensors/gps_0/navsat; the remap below
+# reproduces what Clearpath's generated bridge did, putting it on the ROS
+# topic /a200_0000/sensors/gps_0/fix (CLAUDE.md gotcha #15).
 #   [ = gz->ROS,  ] = ROS->gz
 sleep 12
 ros2 run ros_gz_bridge parameter_bridge \
   "/a200_0000/sensors/compass_0/mag@sensor_msgs/msg/MagneticField[gz.msgs.Magnetometer" \
   "/a200_0000/sensors/imu_enu/data@sensor_msgs/msg/Imu[gz.msgs.IMU" \
+  "/a200_0000/sensors/gps_0/navsat@sensor_msgs/msg/NavSatFix[gz.msgs.NavSat" \
   "/broker/msgs@ros_gz_interfaces/msg/Dataframe]gz.msgs.Dataframe" \
   "/husky/rx@ros_gz_interfaces/msg/Dataframe[gz.msgs.Dataframe" \
   "/base_station/rx@ros_gz_interfaces/msg/Dataframe[gz.msgs.Dataframe" \
-  --ros-args -r __node:=extras_gz_bridge &
+  --ros-args -r __node:=extras_gz_bridge \
+    -r /a200_0000/sensors/gps_0/navsat:=/a200_0000/sensors/gps_0/fix &
 BRIDGE_PID=$!
 
 trap 'kill $BRIDGE_PID $LAUNCH_PID 2>/dev/null' INT TERM
