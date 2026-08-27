@@ -31,8 +31,18 @@ done
 ```
 
 ```bash
+source /opt/ros/jazzy/setup.bash && ros2 daemon stop 2>/dev/null || true
+```
+
+```bash
 rm -f /dev/shm/fastrtps_* /dev/shm/sem.fastrtps_*
 ```
+
+The daemon holds one live FastDDS participant of its own, so it keeps two
+`fastrtps_*` segments alive and recreates them on the next `ros2` command. Stop
+it before the `rm` or Step 3 can never reach `shm : 0` — the count sits at `2`
+with a port number that *changes* between reads. It restarts by itself on the
+next `ros2` CLI call; nothing needs to start it.
 
 Ignore whatever `kill_sim.sh` prints about being clean. Step 3 decides that.
 
@@ -48,7 +58,10 @@ echo "shm     : $(ls /dev/shm | grep -c fastrtps)"
 **Required: no process lines, `opt/ros : 0`, `shm : 0`.**
 
 Acceptable exceptions:
-- a lone `ros2-daemon` python process — the ROS 2 CLI discovery daemon, not the sim
+- a lone `ros2-daemon` python process — the ROS 2 CLI discovery daemon, not the
+  sim. If it is running it also owns two `fastrtps_*` segments, so `shm` reads
+  `2` rather than `0`; that is the daemon, not a leak (its port number changes
+  between reads). Step 2's `ros2 daemon stop` prevents this.
 - `pgrep -c` returning 1–2 with nothing visible in `ps` — your own grep matching itself
 - **a nonzero `shm` count on the first read** — see below
 

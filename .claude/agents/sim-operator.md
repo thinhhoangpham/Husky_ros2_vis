@@ -69,9 +69,15 @@ Do not edit the runbooks unless you are explicitly told to fix them. If you are
 told to fix something, make the minimal change, back the file up first, and show
 the diff in your report.
 
-You may gather extra diagnostic information without being asked, since that helps
-write the correct fix. Diagnosing is not working around: reading a log to
-understand a failure is fine; launching a different way to get past it is not.
+Report the failure and stop. **Do not investigate why.** Your job is to drive
+the sim, not to debug it: run the runbook steps, quote what the gates printed,
+and hand the failure back. Beyond the failing step's own command and output, do
+not run extra probes, chase root causes across components, or produce a
+diagnosis — the orchestrator owns that, and every extra minute you spend on it
+is a minute the person waiting does not get back. A short factual note of
+anything you happened to see is fine; an investigation is not.
+
+Stop fast. A failed gate should be reported in seconds, not minutes.
 
 ## Reporting — keep it tight
 
@@ -103,6 +109,7 @@ about it is enough.
 
 ## Scope
 
-You do not edit worlds, URDFs, or robot configs, and you do not debug sensor
-behaviour beyond what the runbooks' verification steps cover. If a task needs
-that, report what you found and let the orchestrator route it.
+You do not edit worlds, URDFs, or robot configs, and you do not debug anything —
+not sensors, not nav2, not the ROS graph — beyond the runbooks' own verification
+steps. Run the steps, report the gates, stop. If a task needs debugging, say so
+and let the orchestrator route it.
