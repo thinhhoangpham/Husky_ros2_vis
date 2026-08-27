@@ -29,12 +29,14 @@ import sys
 import time
 
 NS = "/a200_0000"
-# The maps group (lifecycle_manager_maps, this launch file's own Stage 2)
-# plus every node lifecycle_manager_navigation manages, per
-# nav2_bringup/launch/navigation_launch.py's `lifecycle_nodes` list. Extended
-# 2026-08-26 after collision_monitor's absence from this list let a READY
-# report pass with the cmd_vel output chain silently broken downstream of
-# controller_server (task 6 fix cycle, defect A).
+# Must match launch/nav_park.launch.py's LIFECYCLE_NODES exactly, in order:
+# a single lifecycle_manager_navigation brings all thirteen up, map nodes
+# first (ruling D4, 2026-08-26 - the former separate lifecycle_manager_maps
+# raced nav2's own manager and stalled with map_server inactive while
+# planner_server went active). Extended 2026-08-26 after collision_monitor's
+# absence from this list let a READY report pass with the cmd_vel output
+# chain silently broken downstream of controller_server (task 6 fix cycle,
+# defect A).
 LIFECYCLE = ["map_server", "filter_mask_server", "costmap_filter_info_server",
              "controller_server", "smoother_server", "planner_server",
              "route_server", "behavior_server", "velocity_smoother",
