@@ -456,6 +456,16 @@ slip model at all**, which is why this never happened there.
 0.0045 m/m — 44× better. `kp`/`kd` reach the SDF but DART is a rigid LCP solver
 and ignores them.
 
+**It is now disabled** — `urdf/extras_default.urdf.xacro` no longer includes it,
+so neither `default` nor `full` (which aggregates it) applies it. Compliance 0
+is rigid contact, and a skid-steer turns *by* sliding its wheels laterally, so
+tight turns become physically unexecutable: measured on park 2026-08-27, MPPI
+commanded a reverse arc `v=-0.22 m/s w=+0.41 rad/s` for 129 consecutive
+`cmd_vel` messages, the commands reached the wheels unaltered, and the robot
+moved ~1 cm per sample — stuck 0.64 m past waypoint 4 of
+`routes/park_route_1.yaml`. It remains the right answer for lake's slopes, so
+the trade-off is per-world and must be measured, not assumed.
+
 **25. Neither ported world has a ground plane.** The terrain mesh is the only
 surface (`terreno_lago` spans x ±49.8, y ±24.9). Drive past its edge and there
 is nothing to land on. True of the original worlds too. lake's spawn at `y=-15`

@@ -2,7 +2,17 @@
 <!-- Aggregates the platform.extras.urdf additions shared by every config
      (robot_default.yaml, and robot_full.yaml via extras.urdf.xacro). -->
 <robot xmlns:xacro="http://ros.org/wiki/xacro">
-  <xacro:include filename="/home/thinhpham/Documents/Husky_viz/urdf/wheel_slip.urdf.xacro"/>
+  <!-- wheel_slip.urdf.xacro is deliberately NOT included. It sets slip
+       compliance 0.0 on both axes (rigid contact), written for lake's slopes
+       where Clearpath's stock compliance 1.0 let the robot slide downhill. But
+       a skid-steer turns BY sliding its wheels laterally, so compliance 0 makes
+       tight turns physically unexecutable. Measured on park 2026-08-27: MPPI
+       commanded a reverse arc v=-0.22 m/s w=+0.41 rad/s continuously for 129
+       consecutive cmd_vel messages, the commands reached the wheels unaltered,
+       and the robot moved ~1 cm per sample - stuck 0.64 m past waypoint 4 of
+       routes/park_route_1.yaml. The same mechanism explains in-place spins
+       wandering metres. Reinstate it only for lake, and only with a
+       measurement. -->
   <xacro:include filename="/home/thinhpham/Documents/Husky_viz/urdf/imu_enu.urdf.xacro"/>
   <xacro:include filename="/home/thinhpham/Documents/Husky_viz/urdf/gps_2hz.urdf.xacro"/>
 

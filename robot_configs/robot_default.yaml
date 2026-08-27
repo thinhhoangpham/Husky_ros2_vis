@@ -15,8 +15,8 @@ system:
 platform:
   controller: ps4
   # Shared extras aggregator (urdf/extras_default.urdf.xacro):
-  #  - wheel_slip: without it the robot slides sideways off any slope
-  #    (0.198 m/m lateral drift vs 0.0045 m/m with this applied).
+  #  - wheel_slip: NOT included (see extras_default.urdf.xacro) - rigid
+  #    contact blocks skid-steer turning on park; it is a lake-only fix.
   #  - imu_enu: world-referenced (ENU) yaw source for the global EKF.
   extras:
     urdf:
