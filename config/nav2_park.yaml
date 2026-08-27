@@ -155,6 +155,10 @@ local_costmap:
         plugin: "nav2_costmap_2d::InflationLayer"
         cost_scaling_factor: 4.0
         inflation_radius: 0.8
+      # Absolute topic, deliberately. A costmap layer resolves a relative
+      # observation-source name inside the costmap sub-node, so "sensors/..."
+      # bound to /a200_0000/local_costmap/sensors/lidar2d_0/scan - zero
+      # publishers, no scans ever marked. Same trap as gotcha #31.
       voxel_layer:
         plugin: "nav2_costmap_2d::VoxelLayer"
         enabled: true
@@ -166,7 +170,7 @@ local_costmap:
         mark_threshold: 0
         observation_sources: scan
         scan:
-          topic: sensors/lidar2d_0/scan
+          topic: /a200_0000/sensors/lidar2d_0/scan
           max_obstacle_height: 2.0
           clearing: true
           marking: true
@@ -203,12 +207,16 @@ global_costmap:
         plugin: "nav2_costmap_2d::KeepoutFilter"
         enabled: True
         filter_info_topic: "/a200_0000/costmap_filter_info"
+      # Must be absolute for the same reason as the local costmap's voxel_layer:
+      # verified live 2026-08-26 that both costmaps had never received a single
+      # scan while the lidar reported 50 returns on a trunk 0.2 m ahead -
+      # obstacle avoidance was silently inert. See gotcha #36.
       obstacle_layer:
         plugin: "nav2_costmap_2d::ObstacleLayer"
         enabled: true
         observation_sources: scan
         scan:
-          topic: sensors/lidar2d_0/scan
+          topic: /a200_0000/sensors/lidar2d_0/scan
           max_obstacle_height: 2.0
           clearing: true
           marking: true

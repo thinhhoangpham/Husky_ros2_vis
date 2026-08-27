@@ -529,6 +529,22 @@ the window is wide. Always gate with `tools/check_nav2_ready.py`.
 are `Y_UP`; the rest are `Z_UP`. A loader that ignores it puts 31 of 97
 models on their side, and the resulting map still looks plausible.
 
+**36. Costmap `observation_sources` topics must be absolute too.** A costmap
+layer resolves a relative observation-source name *inside the costmap sub-node*,
+so `topic: sensors/lidar2d_0/scan` bound to
+`/a200_0000/local_costmap/sensors/lidar2d_0/scan` (and the `global_costmap`
+equivalent) — names with zero publishers. Nothing errors: the layers come up
+enabled and simply never mark. Verified live 2026-08-26 in park — both costmaps
+had received no scan at all while the lidar showed 50 returns on a tree trunk
+0.2 m ahead, i.e. obstacle avoidance was silently inert. Fixed in
+`config/nav2_park.yaml` by writing `/a200_0000/sensors/lidar2d_0/scan`. Same
+trap as #31, one layer type further in.
+
+**`collision_monitor` is NOT affected** — it is an ordinary node, not a costmap
+sub-node, so its relative `sensors/lidar2d_0/scan` correctly resolves to
+`/a200_0000/sensors/lidar2d_0/scan` (confirmed: exactly 1 subscriber on that
+topic). Leave it relative.
+
 ## Sensor semantics (verified)
 
 **IMU mounting is correct.** `base_link -> imu_0_base_link` (identity)
