@@ -201,30 +201,21 @@ global_costmap:
       height: 60
       origin_x: -55.0
       origin_y: -31.55
-      plugins: ["static_layer", "obstacle_layer", "inflation_layer"]
+      # The global costmap is deliberately static: prior map
+      # (maps/park_map.pgm) + keepout mask + inflation, no live sensor layer.
+      # Design decision 2026-08-27 - the prior map is the planning authority and
+      # the local costmap owns live obstacles. Consequence, stated explicitly:
+      # the planner never learns obstacles absent from the prior map (the 15
+      # arbol4 trees are excluded from it by design, gotcha #28), so it plans
+      # straight through them and the local costmap + MPPI must dodge - which is
+      # the intended demonstration. Clearpath stock includes obstacle_layer
+      # here; this is a deliberate deviation.
+      plugins: ["static_layer", "inflation_layer"]
       filters: ["keepout_filter"]
       keepout_filter:
         plugin: "nav2_costmap_2d::KeepoutFilter"
         enabled: True
         filter_info_topic: "/a200_0000/costmap_filter_info"
-      # Must be absolute for the same reason as the local costmap's voxel_layer:
-      # verified live 2026-08-26 that both costmaps had never received a single
-      # scan while the lidar reported 50 returns on a trunk 0.2 m ahead -
-      # obstacle avoidance was silently inert. See gotcha #36.
-      obstacle_layer:
-        plugin: "nav2_costmap_2d::ObstacleLayer"
-        enabled: true
-        observation_sources: scan
-        scan:
-          topic: /a200_0000/sensors/lidar2d_0/scan
-          max_obstacle_height: 2.0
-          clearing: true
-          marking: true
-          data_type: "LaserScan"
-          raytrace_max_range: 3.0
-          raytrace_min_range: 0.0
-          obstacle_max_range: 2.5
-          obstacle_min_range: 0.0
       static_layer:
         plugin: "nav2_costmap_2d::StaticLayer"
         map_subscribe_transient_local: true

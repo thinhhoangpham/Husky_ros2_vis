@@ -548,7 +548,8 @@ enabled and simply never mark. Verified live 2026-08-26 in park — both costmap
 had received no scan at all while the lidar showed 50 returns on a tree trunk
 0.2 m ahead, i.e. obstacle avoidance was silently inert. Fixed in
 `config/nav2_park.yaml` by writing `/a200_0000/sensors/lidar2d_0/scan`. Same
-trap as #31, one layer type further in.
+trap as #31, one layer type further in. (Since 2026-08-27 only the local
+costmap carries a sensor layer — the global costmap is static by design.)
 
 **`collision_monitor` is NOT affected** — it is an ordinary node, not a costmap
 sub-node, so its relative `sensors/lidar2d_0/scan` correctly resolves to
