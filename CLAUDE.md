@@ -135,7 +135,7 @@ compass and no radio** — those are world-level Gazebo systems present only in
 | wheel odom | 11.8 Hz |
 | odom (EKF fused: wheel + IMU) | 33.2 Hz |
 | IMU | 67.2 Hz |
-| GPS (`navsat`) | 1 Hz (sensor `update_rate`) |
+| GPS (`navsat`) | 2 Hz (custom `urdf/gps_2hz.urdf.xacro`, replacing the 1 Hz stock `garmin_18x`) |
 | 2D lidar (`gpu_lidar`) | 23.7 Hz |
 | 3D lidar (`gpu_lidar`) | 13.0 Hz |
 
@@ -522,8 +522,8 @@ controller state via the `controller_manager` service directly (see gotcha
 #27) rather than reaching for `ros2 control list_controllers`.
 
 **34. Nav2 comes up healthy but useless if started before `map -> odom`
-exists.** No crash, no error, goals silently ignored. park's GPS is 1 Hz so
-the window is wide. Always gate with `tools/check_nav2_ready.py`.
+exists.** No crash, no error, goals silently ignored. park's GPS is 2 Hz so
+the window is still wide. Always gate with `tools/check_nav2_ready.py`.
 
 **35. COLLADA up-axis is mixed in this dataset.** `arbol4/*` and `bench/*`
 are `Y_UP`; the rest are `Z_UP`. A loader that ignores it puts 31 of 97
@@ -607,6 +607,7 @@ See `tools/check_radio.py`.
 | `check_terrain_drive.py` | pitch transition while driving onto the ramp |
 | `check_compass_heading.py` | heading tracks yaw within ~1.4 deg |
 | `check_radio.py` | bidirectional transmit, RSSI, range cutoff |
+| `check_localization_drive.py` | EKF `map` pose against Gazebo truth on a driven leg and at rest |
 | `restore_world_state_poses.py` | writes a Classic `<state>` block's poses onto the models |
 | `offset_world_model_z.py` | shifts model-level pose z for models above a threshold |
 | `add_obj_vertex_normals.py` | adds vertex normals to an OBJ and indexes them from faces |

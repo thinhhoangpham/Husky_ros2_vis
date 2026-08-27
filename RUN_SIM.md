@@ -165,6 +165,11 @@ disown
 Do **not** launch RViz unless you need to look at something. It costs ~60% of
 a core, and the planner misses its deadlines under load.
 
+The command path is stock Clearpath wiring: `controller_server` ->
+`cmd_vel_nav` -> `velocity_smoother` -> `cmd_vel_smoothed` ->
+`collision_monitor` -> `cmd_vel`. The monitor is **in** the path; nothing
+bypasses it.
+
 ## Step 7 — Gate on readiness
 
 ```bash
@@ -182,15 +187,39 @@ with `Costmap timed out`; nav2 then falls through to recovery behaviours, and
 repeated `BackUp` recoveries drive the robot **north off the terrain edge**,
 where it falls forever (CLAUDE.md gotcha #25). Observed three times.
 
-## Step 8 — Send a goal
+## Step 8 — Gate on localization
+
+```bash
+python3 tools/check_localization_drive.py --distance 10
+```
+
+Required: `PASS`, exit code 0. It drives a 10 m straight leg with raw
+`cmd_vel`, then holds a rest window, comparing the EKF `map -> base_link` pose
+against Gazebo truth.
+
+Expected result, measured on park:
+
+| Quantity | Value |
+|---|---|
+| EKF vs truth, driving | 0.049 m mean / 0.112 m max |
+| EKF vs truth, at rest | 0.000 m |
+| heading error | 0.00 deg |
+
+Run this before sending any goal. A localization error that survives this gate
+is the one thing every later gate silently inherits.
+
+## Step 9 — Send a goal
 
 ```bash
 python3 tools/nav_goal.py X Y [YAW_DEG]        # metric, map frame
 python3 tools/nav_goal_ll.py LAT LON           # latitude / longitude
-python3 tools/nav_route.py routes/park_route_1.yaml   # recorded route
 ```
 
 Required: exit code 0.
+
+`YAW_DEG` is optional and does not constrain arrival. The controller's goal
+checker is `nav2_controller::PositionGoalChecker`, which ignores orientation —
+heading at the goal is whatever the approach produced, not what was asked for.
 
 Directions in park, after `heading_deg 90`: **+x is North, +y is West.** The
 spawn at `x=45.64` is 4.36 m inside the **north** edge, so a goal with a
@@ -200,7 +229,11 @@ Terrain is x `-50 .. 50`, y `-26.55 .. 23.45`. The goal scripts reject anything
 outside it before sending, but recovery behaviours are not constrained by the
 keepout mask — only the planner is.
 
-## Step 9 — Confirm arrival
+A goal inside a mapped obstacle (e.g. the water tower) or off the terrain is
+refused by the planner with `NO PATH`. That is the correct result, not a
+failure of this step.
+
+## Step 10 — Confirm arrival
 
 ```bash
 gz model -m a200_0000/robot -p
@@ -208,6 +241,38 @@ gz model -m a200_0000/robot -p
 
 Required: within 0.5 m of the goal, and z near 3.12.
 
+Reached goals end **exactly** on the goal: measured gap `0.000 m` on all five
+route waypoints and on a 59 m far-corner goal, path length 1.01x straight line,
+zero lethal cells on the planned path. A gap in the tens of centimetres is
+still a pass; a metre is not.
+
 A large negative z means it left the terrain during recoveries. Restore it
 with a fresh `CLEAN_SIM.md` + Step 3 cycle — `set_pose` does not clear the
 fall velocity, so teleporting a falling robot does not hold.
+
+## Step 11 — End-to-end acceptance: the full route
+
+The single check that exercises planning, control, localization and the
+collision monitor together. Run it whenever the nav stack or its config has
+changed.
+
+```bash
+python3 tools/nav_route.py routes/park_route_1.yaml
+```
+
+Required: exit code 0, all five waypoints reported reached, and no recovery
+behaviours and no aborts in the run.
+
+Expected result, measured on park:
+
+| Quantity | Value |
+|---|---|
+| distance driven | 77.2 m |
+| duration | 170 s |
+| waypoints reached | 5 of 5 |
+| closest approach per waypoint | 0.02 / 0.05 / 0.19 / 0.04 / 0.15 m |
+| final pose vs waypoint 5 | 0.15 m |
+| recoveries / aborts | 0 / 0 |
+
+Confirm the end pose with Step 10's command. A run that reaches all five
+waypoints but logs recoveries is a fail — it means a gate above was skipped.
