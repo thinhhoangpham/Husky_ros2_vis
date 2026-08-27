@@ -9,6 +9,17 @@
 # Both EKFs fuse wheel odometry and IMU (yaw + yaw rate only here, not
 # raw acceleration - see the comment above imu0 below). Only this one also
 # fuses GPS.
+#
+# The two EKFs read DIFFERENT IMUs, deliberately. Stock imu_0 declares no
+# <orientation_reference_frame>, so gz-sim references its orientation to the
+# sensor's INITIAL pose - measured yaw 0.0000 at world yaw 149.72 deg in park.
+# That is harmless for the local EKF, whose odom frame is itself spawn-relative,
+# and it keeps sole ownership of odom -> base_link on stock imu_0.
+# This global EKF cannot use it: it fuses yaw as an ABSOLUTE map-frame heading,
+# so a spawn-relative yaw put a constant -149.7 deg rotation into map -> odom -
+# the confirmed cause of nav2 driving away from valid paths. It therefore reads
+# the ENU-referenced imu_enu (urdf/imu_enu.urdf.xacro), rotated ENU -> map by
+# tools/imu_map_relay.py.
 a200_0000:
   navsat_transform_node:
     ros__parameters:
@@ -24,13 +35,17 @@ a200_0000:
       datum: [49.9, 8.9, 0.0]
       # park has no Magnetometer, so heading comes from IMU orientation.
       magnetic_declination_radians: 0.0
-      # 1.5708 (Task 4 fix session 5, controller ruling): IMU yaw is in the
-      # world frame, world +x is North after park.sdf's heading_deg: 90, so
-      # a north-facing robot has true ENU yaw +pi/2; navsat_transform adds
-      # yaw_offset to IMU yaw to get ENU yaw, so this must be +pi/2, not 0.
-      # 0.0 looked correct under every self-consistent ENU-vs-ENU check but
-      # actually rotated the whole map frame 90 degrees from Gazebo world -
-      # exactly the error that would silently misalign maps/park_map.pgm.
+      # 1.5708 = +pi/2, kept - but the original justification for it was
+      # wrong and is corrected here. It claimed "IMU yaw is in the world
+      # frame"; measurement disproved that (stock imu_0 reports yaw 0.0000 at
+      # world yaw 149.72 deg - it is referenced to the spawn pose, not the
+      # world). This node now reads the RAW ENU-referenced imu_enu topic
+      # instead, which is what navsat_transform expects. Measured in park:
+      # ENU yaw 59.73 deg at world yaw 149.72 deg, i.e. ENU yaw =
+      # world yaw - pi/2 (park.sdf declares heading_deg 90). navsat_transform
+      # adds yaw_offset to the ENU yaw it is given, so +pi/2 is exactly the
+      # ENU -> world/map mapping. Do NOT point this at sensors/imu_map/data:
+      # that topic has the +pi/2 already applied and would double-count it.
       yaw_offset: 1.5708
       use_odometry_yaw: false
       zero_altitude: true
@@ -77,7 +92,10 @@ a200_0000:
       # nothing pins absolute x,y between 1 Hz GPS fixes, and
       # double-integrating accelerometer noise over that gap was a real,
       # independent divergence source seen in fix session 1.
-      imu0: sensors/imu_0/data
+      # sensors/imu_map/data, not sensors/imu_0/data: imu_map_relay's
+      # world/map-referenced yaw (see the header comment). imu0_config is
+      # unchanged - yaw (index 5) and yaw rate (index 11).
+      imu0: sensors/imu_map/data
       imu0_config: [false, false, false,
                     false, false, true,
                     false, false, false,

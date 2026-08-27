@@ -3,5 +3,6 @@
 <robot xmlns:xacro="http://ros.org/wiki/xacro">
   <xacro:include filename="/home/thinhpham/Documents/Husky_viz/urdf/compass.urdf.xacro"/>
   <xacro:include filename="/home/thinhpham/Documents/Husky_viz/urdf/comms.urdf.xacro"/>
+  <xacro:include filename="/home/thinhpham/Documents/Husky_viz/urdf/imu_enu.urdf.xacro"/>
   <xacro:include filename="/home/thinhpham/Documents/Husky_viz/urdf/wheel_slip.urdf.xacro"/>
 </robot>

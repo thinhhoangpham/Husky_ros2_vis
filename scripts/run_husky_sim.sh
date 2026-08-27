@@ -107,11 +107,13 @@ ros2 launch /home/thinhpham/Documents/Husky_viz/launch/sim_compass.launch.py \
 LAUNCH_PID=$!
 
 # Clearpath's generator only bridges sensors it knows about, so the
-# magnetometer and the comms topics need their own bridge.
+# magnetometer, the ENU-referenced IMU and the comms topics need their own
+# bridge (CLAUDE.md gotcha #7).
 #   [ = gz->ROS,  ] = ROS->gz
 sleep 12
 ros2 run ros_gz_bridge parameter_bridge \
   "/a200_0000/sensors/compass_0/mag@sensor_msgs/msg/MagneticField[gz.msgs.Magnetometer" \
+  "/a200_0000/sensors/imu_enu/data@sensor_msgs/msg/Imu[gz.msgs.IMU" \
   "/broker/msgs@ros_gz_interfaces/msg/Dataframe]gz.msgs.Dataframe" \
   "/husky/rx@ros_gz_interfaces/msg/Dataframe[gz.msgs.Dataframe" \
   "/base_station/rx@ros_gz_interfaces/msg/Dataframe[gz.msgs.Dataframe" \

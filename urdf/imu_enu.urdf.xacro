@@ -1,0 +1,51 @@
+<?xml version="1.0"?>
+<!-- World-referenced (ENU) IMU for the A200.
+
+     Clearpath's stock imu_0 (clearpath_sensors_description/urdf/
+     microstrain_imu.urdf.xacro) declares no <orientation_reference_frame>, so
+     gz-sim reports its orientation relative to the sensor's INITIAL pose.
+     Measured in park: imu_0 yaw reads 0.0000 while the robot's world yaw is
+     149.72 deg. That is fine in the odom frame (the local EKF only needs a
+     consistent relative heading), but the global EKF fuses yaw as an ABSOLUTE
+     map-frame heading, so it inherited a constant -149.7 deg map -> odom
+     rotation error.
+
+     This second IMU declares localization ENU, so its orientation is
+     referenced to the world ENU frame instead of the spawn pose. Measured
+     against the same run: ENU yaw 59.73 deg at world yaw 149.72 deg, i.e.
+     world/map yaw = ENU yaw + pi/2 exactly (park.sdf has heading_deg 90).
+
+     Not auto-bridged - see CLAUDE.md gotcha #7; the bridge line lives in
+     scripts/run_husky_sim.sh. -->
+<robot xmlns:xacro="http://ros.org/wiki/xacro">
+  <link name="imu_enu_link">
+    <inertial>
+      <origin xyz="0 0 0" rpy="0 0 0"/>
+      <mass value="0.01"/>
+      <inertia ixx="1e-6" ixy="0.0" ixz="0.0" iyy="1e-6" iyz="0.0" izz="1e-6"/>
+    </inertial>
+    <visual>
+      <geometry><box size="0.015 0.015 0.004"/></geometry>
+    </visual>
+  </link>
+
+  <joint name="imu_enu_joint" type="fixed">
+    <origin xyz="0 0 0" rpy="0 0 0"/>
+    <parent link="base_link"/>
+    <child link="imu_enu_link"/>
+  </joint>
+
+  <gazebo reference="imu_enu_link">
+    <sensor name="imu_enu" type="imu">
+      <always_on>true</always_on>
+      <update_rate>50</update_rate>
+      <gz_frame_id>imu_enu_link</gz_frame_id>
+      <topic>$(arg namespace)/sensors/imu_enu/data</topic>
+      <imu>
+        <orientation_reference_frame>
+          <localization>ENU</localization>
+        </orientation_reference_frame>
+      </imu>
+    </sensor>
+  </gazebo>
+</robot>

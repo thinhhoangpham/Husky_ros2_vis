@@ -18,6 +18,7 @@ from launch_ros.actions import Node
 
 CONFIG = "/home/thinhpham/Documents/Husky_viz/config/gps_localization.yaml"
 RELAY_SCRIPT = "/home/thinhpham/Documents/Husky_viz/tools/gps_covariance_relay.py"
+IMU_RELAY_SCRIPT = "/home/thinhpham/Documents/Husky_viz/tools/imu_map_relay.py"
 NAMESPACE = "a200_0000"
 
 TF_REMAPS = [
@@ -42,6 +43,19 @@ def generate_launch_description() -> LaunchDescription:
             output="screen",
         ),
 
+        # Rotates the ENU-referenced imu_enu orientation into the Gazebo
+        # world/map frame (+pi/2 about z, park.sdf heading_deg 90) so
+        # ekf_node_map can fuse yaw as an absolute map-frame heading.
+        ExecuteProcess(
+            cmd=[
+                "python3", IMU_RELAY_SCRIPT,
+                "--ros-args",
+                "-r", f"__ns:=/{NAMESPACE}",
+            ],
+            name="imu_map_relay",
+            output="screen",
+        ),
+
         Node(
             package="robot_localization",
             executable="navsat_transform_node",
@@ -50,7 +64,11 @@ def generate_launch_description() -> LaunchDescription:
             output="screen",
             parameters=[CONFIG, {"use_sim_time": use_sim_time}],
             remappings=[
-                ("imu", "sensors/imu_0/data"),
+                # The RAW ENU topic, not sensors/imu_map/data:
+                # navsat_transform expects ENU yaw and applies yaw_offset
+                # itself. Stock imu_0 is spawn-relative (yaw 0.0000 at world
+                # yaw 149.72 deg in park) and was never a world heading.
+                ("imu", "sensors/imu_enu/data"),
                 # gps_covariance_relay stamps a usable covariance onto the sim
                 # GPS fix (which reports COVARIANCE_TYPE_UNKNOWN, all zeros) -
                 # a zero covariance matrix is singular and made ekf_node_map's
