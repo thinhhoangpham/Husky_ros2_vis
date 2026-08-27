@@ -79,7 +79,7 @@ a200_0000:
       # wheel odometry over-counted distance by 46% in the curved final
       # approach (2.99 m truth vs 4.36 m odom), which ran this EKF 0.65 m
       # ahead of truth and made the goal checker fire 0.95 m early. GPS
-      # (odom1 below) is the position source in the map frame by design.
+      # (odom0 below) is the position source in the map frame by design.
 
       # imu0 restored (Task 4 fix session 4): dropping it entirely (fix
       # session 3) was a contaminated experiment - it was tried while
@@ -105,11 +105,15 @@ a200_0000:
       imu0_queue_size: 10
       imu0_remove_gravitational_acceleration: true
 
-      odom1: odometry/gps            # from navsat_transform_node
-      odom1_config: [true,  true,  false,
+      # robot_localization loads odomN inputs by consecutive index starting
+      # at 0 and silently stops at the first gap - after wheel odometry (the
+      # old odom0) was removed, the GPS at odom1 was never read
+      # (diagnostics: "Neither X nor its velocity is being measured").
+      odom0: odometry/gps            # from navsat_transform_node
+      odom0_config: [true,  true,  false,
                      false, false, false,
                      false, false, false,
                      false, false, false,
                      false, false, false]
-      odom1_differential: false
-      odom1_queue_size: 10
+      odom0_differential: false
+      odom0_queue_size: 10
