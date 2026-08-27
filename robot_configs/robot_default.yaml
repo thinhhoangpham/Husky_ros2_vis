@@ -14,12 +14,14 @@ system:
     namespace: a200_0000
 platform:
   controller: ps4
-  # Wheel-slip physics override. Without it the robot slides sideways
-  # off any slope (0.198 m/m lateral drift vs 0.0045 m/m with this applied).
+  # Shared extras aggregator (urdf/extras_default.urdf.xacro):
+  #  - wheel_slip: without it the robot slides sideways off any slope
+  #    (0.198 m/m lateral drift vs 0.0045 m/m with this applied).
+  #  - imu_enu: world-referenced (ENU) yaw source for the global EKF.
   extras:
     urdf:
       package: null
-      path: /home/thinhpham/Documents/Husky_viz/urdf/wheel_slip.urdf.xacro
+      path: /home/thinhpham/Documents/Husky_viz/urdf/extras_default.urdf.xacro
   attachments:
     - name: front_bumper
       type: a200.bumper

@@ -1,0 +1,7 @@
+<?xml version="1.0"?>
+<!-- Aggregates the platform.extras.urdf additions shared by every config
+     (robot_default.yaml, and robot_full.yaml via extras.urdf.xacro). -->
+<robot xmlns:xacro="http://ros.org/wiki/xacro">
+  <xacro:include filename="/home/thinhpham/Documents/Husky_viz/urdf/wheel_slip.urdf.xacro"/>
+  <xacro:include filename="/home/thinhpham/Documents/Husky_viz/urdf/imu_enu.urdf.xacro"/>
+</robot>
