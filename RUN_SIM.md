@@ -186,38 +186,64 @@ The command path is stock Clearpath wiring: `controller_server` ->
 `collision_monitor` -> `cmd_vel`. The monitor is **in** the path; nothing
 bypasses it.
 
-## Step 6b — Optional: RViz
+## Step 6b — RViz
 
-Only when you need to look at something. RViz costs ~60% of a core, and the
-planner misses its deadlines under load — leave it off for timed runs and for
-Steps 8 and 11.
-
-With the stack:
+Launch it with the stack:
 
 ```bash
 setsid nohup ros2 launch launch/nav_park.launch.py rviz:=true > /tmp/nav_park.log 2>&1 < /dev/null &
 disown
 ```
 
-Attached to an already-running stack:
+Or attach to a stack that is already running — this exact form is the one that
+works; do **not** add `-r __ns:=/a200_0000`, the config already uses absolute
+topics and the namespace push breaks the TF remaps:
 
 ```bash
 cd ~/Documents/Husky_viz
 source /opt/ros/jazzy/setup.bash
-setsid nohup ros2 run rviz2 rviz2 -d config/nav_park.rviz \
-  --ros-args -r __ns:=/a200_0000 -p use_sim_time:=true \
-  -r /tf:=/a200_0000/tf -r /tf_static:=/a200_0000/tf_static \
-  > /tmp/rviz.log 2>&1 < /dev/null &
+setsid nohup rviz2 -d config/nav_park.rviz \
+  --ros-args -r /tf:=/a200_0000/tf -r /tf_static:=/a200_0000/tf_static \
+  -p use_sim_time:=true > /tmp/rviz.log 2>&1 < /dev/null &
 disown
 ```
 
-Shows: prior map, global costmap, local costmap, global plan, MPPI local plan
-(`optimal_trajectory`), 3D lidar cloud, 2D scan, robot model, TF
-(`map`/`odom`/`base_link`), and waypoint markers on `/a200_0000/waypoints`.
+Verify it bound to the live stack rather than assuming:
 
-The waypoint display stays empty unless something publishes that topic —
-nothing in this repo or in nav2 Jazzy does. `/a200_0000/optimal_trajectory` is
-empty until a goal is being executed.
+```bash
+pgrep -f nav_park.rviz | head -1
+grep -icE "not available|error" /tmp/rviz.log
+```
+
+Required: a pid, and `0`. A nonzero count means panels or displays failed to
+connect.
+
+Ten displays, all namespaced: global costmap, local costmap, global plan, MPPI
+local plan (`optimal_trajectory`), 3D lidar cloud, 2D scan, robot model, TF
+(`map`/`odom`/`base_link`), grid, waypoint markers.
+
+Notes on what you will see:
+
+- The **local costmap follows the robot** — it is a 5 x 5 m rolling window in
+  the `odom` frame, so its cells appear ahead and vanish behind as it drives.
+  The global costmap is fixed and never changes (static by design since
+  2026-08-27; verified `delta +0` across a 30 m drive).
+- The local grid is drawn **diagonally** across the global one: it is
+  axis-aligned to `odom`, which sits ~139 deg from `map` because the local EKF
+  fuses the spawn-relative stock IMU yaw.
+- The waypoint display stays empty — nothing in this repo or in nav2 Jazzy
+  publishes `/a200_0000/waypoints`.
+- `/a200_0000/optimal_trajectory` is empty until a goal is executing.
+
+RViz costs ~60% of a core and the planner misses deadlines under load, so close
+it before the timed gates in Steps 8 and 11.
+
+To kill it, never use `pkill -f` with a pattern that matches your own command
+line (CLAUDE.md gotcha #9):
+
+```bash
+for p in $(pgrep -f nav_park.rviz); do kill $p 2>/dev/null; done
+```
 
 ## Step 7 — Gate on readiness
 
