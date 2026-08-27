@@ -89,23 +89,6 @@ Visualization Manager:
     Tree: {}
     Update Interval: 0
     Value: true
-  - Alpha: 0.3
-    Binary representation: false
-    Binary threshold: 100
-    Class: rviz_default_plugins/Map
-    Color Scheme: map
-    Draw Behind: true
-    Enabled: true
-    Name: Prior Map
-    Topic:
-      Depth: 5
-      Durability Policy: Transient Local
-      Filter size: 10
-      History Policy: Keep Last
-      Reliability Policy: Reliable
-      Value: /a200_0000/map
-    Use Timestamp: false
-    Value: true
   - Alpha: 0.7
     Binary representation: false
     Binary threshold: 100
