@@ -204,9 +204,9 @@ Visualization Manager:
     Size (m): 0.05
     Style: Flat Squares
     Topic:
-      Depth: 5
+      Depth: 10
       Durability Policy: Volatile
-      Filter size: 10
+      Filter size: 100
       History Policy: Keep Last
       Reliability Policy: Best Effort
       Value: /a200_0000/sensors/lidar2d_0/scan
@@ -238,9 +238,9 @@ Visualization Manager:
     Size (m): 0.03
     Style: Flat Squares
     Topic:
-      Depth: 5
+      Depth: 10
       Durability Policy: Volatile
-      Filter size: 10
+      Filter size: 100
       History Policy: Keep Last
       Reliability Policy: Best Effort
       Value: /a200_0000/sensors/lidar3d_0/points
