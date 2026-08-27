@@ -155,13 +155,11 @@ def generate_launch_description() -> LaunchDescription:
             SetRemap("/" + NAMESPACE + "/odom", "/" + NAMESPACE + "/platform/odom"),
             SetRemap("/tf", "/" + NAMESPACE + "/tf"),
             SetRemap("/tf_static", "/" + NAMESPACE + "/tf_static"),
-            # velocity_smoother publishes straight to cmd_vel. collision_monitor
-            # is deliberately out of the command path because the 2D lidar's
-            # 360 deg sweep sees the robot's own sensor arch at ~0.40 m, which
-            # the monitor reads as a permanent imminent collision and brakes
-            # every nav2 command to zero. See config/nav2_park.yaml.
-            SetRemap("/" + NAMESPACE + "/cmd_vel_smoothed",
-                     "/" + NAMESPACE + "/cmd_vel"),
+            # No cmd_vel remap: velocity_smoother publishes cmd_vel_smoothed and
+            # collision_monitor forwards it to cmd_vel (stock Clearpath wiring).
+            # A remap bypassing the monitor used to live here, needed only while
+            # the 2D lidar's 360 deg sweep saw the robot's own sensor arch; the
+            # sweep is now +-135 deg. See config/nav2_park.yaml.
 
             nav2_node("nav2_controller", "controller_server",
                       extra_remaps=[("cmd_vel", "cmd_vel_nav")]),

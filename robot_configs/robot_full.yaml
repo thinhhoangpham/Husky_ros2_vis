@@ -74,8 +74,13 @@ sensors:
         laser_frame_id: lidar2d_0_laser
         ip_address: 192.168.131.20
         ip_port: 10940
-        angle_min: -3.141592653589793
-        angle_max: 3.141592653589793
+        # Sweep limited to +-135 deg: the rear sector +-135..180 deg is
+        # blocked by the robot's own sensor arch (measured 0.40-0.43 m at
+        # +-140 deg, inside the 1.1 x 0.9 m footprint). A full 360 deg sweep
+        # makes those self-returns look like a permanent imminent collision
+        # to nav2's collision_monitor, which then scales every command to zero.
+        angle_min: -2.356194490192345
+        angle_max: 2.356194490192345
   lidar3d:
   - model: velodyne_lidar
     urdf_enabled: true

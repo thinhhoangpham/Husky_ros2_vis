@@ -317,21 +317,13 @@ collision_monitor:
     enable_stamped_cmd_vel: true
     base_frame_id: "base_link"
     odom_frame_id: "odom"
-    # collision_monitor is deliberately OUT of the command path on this robot.
-    # Its topics are wired to unused names so it stays alive (nav2_bringup
-    # manages it in its lifecycle list) but forwards nothing.
-    #
-    # Why: robot_default.yaml gives the 2D lidar a full 360 deg sweep, so it
-    # sees the robot's own sensor arch at ~0.40 m. collision_monitor has no
-    # concept of the robot's own footprint, so it reads those self-returns as a
-    # permanent imminent collision and scales every nav2 command to zero: the
-    # robot accepts goals, plans a path, and never moves. Clipping the lidar's
-    # angular range would hide the self-returns rather than fix the mismatch,
-    # and the costmap already performs obstacle avoidance with proper footprint
-    # clearing. velocity_smoother therefore publishes straight to cmd_vel
-    # (see the SetRemap in launch/nav_park.launch.py).
-    cmd_vel_in_topic: "cmd_vel_collision_monitor_unused_in"
-    cmd_vel_out_topic: "cmd_vel_collision_monitor_unused_out"
+    # collision_monitor is back in the command path (Clearpath stock wiring).
+    # It was bypassed while the 2D lidar swept a full 360 deg: it saw the robot's
+    # own sensor arch at ~0.40 m, inside the footprint, and read it as a
+    # permanent imminent collision, scaling every nav2 command to zero. Fixed at
+    # the source - the lidar now sweeps +-135 deg (robot_configs/robot_*.yaml).
+    cmd_vel_in_topic: "cmd_vel_smoothed"
+    cmd_vel_out_topic: "cmd_vel"
     state_topic: "collision_monitor_state"
     transform_tolerance: 0.2
     source_timeout: 1.0
