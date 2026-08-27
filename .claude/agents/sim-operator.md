@@ -79,6 +79,40 @@ anything you happened to see is fine; an investigation is not.
 
 Stop fast. A failed gate should be reported in seconds, not minutes.
 
+## "It is up" means the renderer too, not just the ROS graph
+
+Every gate in `RUN_SIM.md` Steps 4-5 reads the ROS graph and the physics
+server. None of them look at what is on screen. A sim can pass all of them
+with **no robot visible in the Gazebo window** — the GUI can finish loading
+its scene while the robot is being spawned and silently miss the model.
+That happened on 2026-08-27: every gate green, `gz model -p` returning the
+spawn pose, and an empty park in the GUI.
+
+So before reporting OK on any start or restart, also verify:
+
+```bash
+gz service -s /world/park/scene/info --reqtype gz.msgs.Empty \
+  --reptype gz.msgs.Scene --timeout 30000 --req '' | grep -c 'a200_0000/robot'
+pgrep -af "gz sim" | grep -v "bash -c" | grep -v server
+```
+
+Required: the count is `1`, and a GUI process is alive. Use the world's own
+name in the service path (gotcha #26). Report both numbers in your gate
+evidence. If the count is `0` while `gz model -m a200_0000/robot -p` returns a
+pose, say so plainly — that is the GUI missing the model, and the fix is a
+full `CLEAN_SIM.md` + `RUN_SIM.md` cycle.
+
+**Never claim a sim "started clean" on ROS-graph evidence alone.** If you did
+not check the renderer, say which gates you ran and that the display is
+unverified.
+
+## Never kill or restart the GUI on its own
+
+Do not `kill` the `gz sim` GUI process, and do not relaunch it standalone with
+`gz sim -g`. The GUI is a child of the `ros2 launch` tree; detaching it that
+way crashes the session and forces a full restart. If the display is wrong,
+the answer is always a full `CLEAN_SIM.md` + `RUN_SIM.md` cycle.
+
 ## Reporting — keep it tight
 
 Your report is read by an orchestrator with limited context. Be complete about
@@ -95,6 +129,7 @@ Gate evidence
   CLEAN_SIM Step 3:  opt/ros : <n>   shm : <n>   processes: <none | list>
   RUN_SIM  Step 4:   topics: <which found>   Publisher count: <n>
   RUN_SIM  Step 5:   robot xyz: <...>  rpy: <...>   expected z ~<...>
+  Renderer:          scene robot count: <0|1>   GUI process: <alive | none>
 
 <If FAILED — the failing step, its command, its actual output, why, and the
 proposed runbook edit.>

@@ -132,6 +132,25 @@ Required: base ~0.13 m above the ground surface, roll and pitch near zero.
 
 A large negative z means it spawned under the terrain and is falling.
 
+Steps 4 and 5 read the ROS graph and the physics server only. Neither looks at
+what is on screen, and the GUI can miss a model that is spawned while it is
+still loading its scene — every gate green, empty park in the window. Also
+required:
+
+```bash
+gz service -s /world/park/scene/info --reqtype gz.msgs.Empty \
+  --reptype gz.msgs.Scene --timeout 30000 --req '' | grep -c 'a200_0000/robot'
+pgrep -af "gz sim" | grep -v "bash -c" | grep -v server
+```
+
+Required: count `1`, and a GUI process alive. Use the running world's name in
+the service path (CLAUDE.md gotcha #26).
+
+If the count is `0` while Step 5 returns a valid pose, the GUI missed the
+model. Do **not** kill the GUI or relaunch it with `gz sim -g` — it is a child
+of the `ros2 launch` tree and detaching it crashes the session. Run a full
+`CLEAN_SIM.md` + Step 3 cycle instead.
+
 ---
 
 ## Optional — drive it
