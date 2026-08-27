@@ -34,10 +34,14 @@ controller_server:
       required_movement_radius: 0.5
       movement_time_allowance: 10.0
     general_goal_checker:
+      # Pose-based SimpleGoalChecker demanded a final heading; with default
+      # goal yaw 0 (= North in park) that forced a 180 deg reversal MPPI
+      # performs as forward arcs, dragging the robot ~4.4 m off the latched
+      # goal before success. PositionGoalChecker ignores orientation — the
+      # robot just stops at the waypoint.
       stateful: true
-      plugin: "nav2_controller::SimpleGoalChecker"
+      plugin: "nav2_controller::PositionGoalChecker"
       xy_goal_tolerance: 0.25
-      yaw_goal_tolerance: 0.25
     FollowPath:
       # MPPI is wrapped in the rotation shim rather than driven directly.
       #
