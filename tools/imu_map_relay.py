@@ -41,7 +41,8 @@ ROT_W = math.cos(HALF_ANGLE)
 # INVENTED sensor characteristic, not measured: gz-sim's IMU publishes an
 # all-zero orientation covariance (no noise model). A zero matrix is singular,
 # so the EKF's Kalman gain for the yaw update would be undefined - the same
-# trap the sim GPS had (tools/gps_covariance_relay.py). 1e-4 rad^2 is 0.57 deg
+# trap the sim GPS was thought to have (its relay was removed 2026-08-26 -
+# robot_localization floors zero covariance itself). 1e-4 rad^2 is 0.57 deg
 # 1-sigma: tight, because the sim orientation is physics ground truth, but
 # nonzero so the update is well-posed.
 DEFAULT_ORIENTATION_VARIANCE = 1e-4

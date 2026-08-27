@@ -29,9 +29,9 @@ fault is not yet explained; §4 measures it before §3 fixes it.
 Two lessons shape this design:
 
 1. **Sim sensors must declare their conventions in the SDF**, not be corrected
-   downstream. Every relay we added (`gps_covariance_relay`,
-   `imu_map_relay`) is a constant hidden in Python that the next person will
-   not find.
+   downstream. Every relay we added (`gps_covariance_relay`, since removed
+   2026-08-26, and `imu_map_relay`) is a constant hidden in Python that the
+   next person will not find.
 2. **A green lifecycle list is not readiness.** The only gate that means
    anything is *estimate vs truth, in motion*.
 
@@ -111,8 +111,10 @@ today) sets:
 
 Whether `ros_gz_bridge` then fills `position_covariance` from the declared
 noise is **unknown** — verify with one `ros2 topic echo`. If it does,
-`gps_covariance_relay.py` is deleted. If it does not, the relay stays, but it
-reads its covariance from the same stddev so there is one number.
+`gps_covariance_relay.py` is deleted. It was in fact deleted on 2026-08-26
+regardless: its invented 2.5 m covariance made the global EKF trust wheel
+velocity over GPS, drifting 2.7 m while the robot was stationary, and
+robot_localization floors zero covariance itself as in the ROS 1 reference.
 
 The sensor keeps the name `gps_0` and topic `sensors/gps_0/fix` for the same
 reason as §3.1.

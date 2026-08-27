@@ -29,7 +29,6 @@ PATTERNS=(
   # nav2 + GPS localization stack (launch/nav_park.launch.py) - see CLAUDE.md #21
   "navsat_transform_node"
   "ekf_node_map"
-  "gps_covariance_relay"
   "controller_server"
   "planner_server"
   "smoother_server"
