@@ -162,13 +162,43 @@ setsid nohup ros2 launch launch/nav_park.launch.py > /tmp/nav_park.log 2>&1 < /d
 disown
 ```
 
-Do **not** launch RViz unless you need to look at something. It costs ~60% of
-a core, and the planner misses its deadlines under load.
-
 The command path is stock Clearpath wiring: `controller_server` ->
 `cmd_vel_nav` -> `velocity_smoother` -> `cmd_vel_smoothed` ->
 `collision_monitor` -> `cmd_vel`. The monitor is **in** the path; nothing
 bypasses it.
+
+## Step 6b — Optional: RViz
+
+Only when you need to look at something. RViz costs ~60% of a core, and the
+planner misses its deadlines under load — leave it off for timed runs and for
+Steps 8 and 11.
+
+With the stack:
+
+```bash
+setsid nohup ros2 launch launch/nav_park.launch.py rviz:=true > /tmp/nav_park.log 2>&1 < /dev/null &
+disown
+```
+
+Attached to an already-running stack:
+
+```bash
+cd ~/Documents/Husky_viz
+source /opt/ros/jazzy/setup.bash
+setsid nohup ros2 run rviz2 rviz2 -d config/nav_park.rviz \
+  --ros-args -r __ns:=/a200_0000 -p use_sim_time:=true \
+  -r /tf:=/a200_0000/tf -r /tf_static:=/a200_0000/tf_static \
+  > /tmp/rviz.log 2>&1 < /dev/null &
+disown
+```
+
+Shows: prior map, global costmap, local costmap, global plan, MPPI local plan
+(`optimal_trajectory`), 3D lidar cloud, 2D scan, robot model, TF
+(`map`/`odom`/`base_link`), and waypoint markers on `/a200_0000/waypoints`.
+
+The waypoint display stays empty unless something publishes that topic —
+nothing in this repo or in nav2 Jazzy does. `/a200_0000/optimal_trajectory` is
+empty until a goal is being executed.
 
 ## Step 7 — Gate on readiness
 

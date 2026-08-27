@@ -55,6 +55,7 @@ from launch.actions import (
     IncludeLaunchDescription,
     SetEnvironmentVariable,
 )
+from launch.conditions import IfCondition
 from launch.launch_description_sources import PythonLaunchDescriptionSource
 from launch.substitutions import LaunchConfiguration
 from launch_ros.actions import Node, PushRosNamespace, SetParameter, SetRemap
@@ -65,6 +66,7 @@ REPO = "/home/thinhpham/Documents/Husky_viz"
 NAMESPACE = "a200_0000"
 FILTER_CONFIG = os.path.join(REPO, "config", "costmap_filter_info.yaml")
 NAV2_CONFIG = os.path.join(REPO, "config", "nav2_park.yaml")
+RVIZ_CONFIG = os.path.join(REPO, "config", "nav_park.rviz")
 
 # Strict startup order for the single lifecycle manager. The three map nodes
 # come first so the map and the keepout mask are published and latched before
@@ -128,6 +130,7 @@ def generate_launch_description() -> LaunchDescription:
     return LaunchDescription([
         DeclareLaunchArgument("use_sim_time", default_value="true"),
         DeclareLaunchArgument("autostart", default_value="true"),
+        DeclareLaunchArgument("rviz", default_value="false"),
         SetEnvironmentVariable("RCUTILS_LOGGING_BUFFERED_STREAM", "1"),
 
         # Stage 1 - global localization (map -> odom)
@@ -174,6 +177,20 @@ def generate_launch_description() -> LaunchDescription:
                       extra_remaps=[("cmd_vel", "cmd_vel_nav")]),
             nav2_node("nav2_collision_monitor", "collision_monitor", "collision_monitor"),
             nav2_node("opennav_docking", "opennav_docking", "docking_server"),
+        ]),
+
+        # Optional view. Its own group: it needs the namespace and the tf
+        # remaps, but none of Stage 3's topic remaps. The .rviz file names
+        # every display topic absolutely, so PushRosNamespace only affects
+        # rviz2's own /tf and /tf_static subscriptions - which is the point,
+        # since this stack publishes tf under the namespace, not globally.
+        GroupAction([
+            PushRosNamespace(NAMESPACE),
+            Node(package="rviz2", executable="rviz2", name="rviz2",
+                 output="screen", arguments=["-d", RVIZ_CONFIG],
+                 parameters=[{"use_sim_time": use_sim_time}],
+                 remappings=NAV2_REMAPS,
+                 condition=IfCondition(LaunchConfiguration("rviz"))),
         ]),
 
         # The one manager. Outside the Stage 3 group on purpose: it needs the
