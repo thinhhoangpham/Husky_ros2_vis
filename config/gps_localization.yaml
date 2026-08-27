@@ -58,15 +58,13 @@ a200_0000:
   ekf_node_map:
     ros__parameters:
       use_sim_time: true
-      # 10.0, not 30.0 (controller ruling, Task 4 fix session): map -> odom
-      # correction is driven by 1 Hz GPS, so 30 Hz buys nothing and only
-      # costs missed deadlines on this machine, which is measurably CPU
-      # starved while gz sim runs (load average 13.96, gz sim >100% CPU,
-      # this node logging "Failed to meet update rate" at 30 Hz). 10 Hz is
-      # still 10x the GPS rate. Do not restore to 30 without re-measuring
-      # CPU headroom first.
-      frequency: 10.0
+      # 50 Hz matches the ROS 1 reference; the earlier 10 Hz ruling predates
+      # the measurement that the filter lags 0.9 m at motion onset -
+      # re-measure CPU only if "Failed to meet update rate" errors become
+      # continuous.
+      frequency: 50.0
       two_d_mode: true               # park is flat to 3.5 mm
+      predict_to_current_time: true
       publish_tf: true
       print_diagnostics: true
       map_frame: map
@@ -74,12 +72,25 @@ a200_0000:
       base_link_frame: base_link
       world_frame: map               # <- publishes map -> odom
 
-      # No odom0 here, deliberately: wheel odometry is NOT fused into this
-      # global EKF. Measured 2026-08-26 on a logged nav2 goal - skid-steer
-      # wheel odometry over-counted distance by 46% in the curved final
-      # approach (2.99 m truth vs 4.36 m odom), which ran this EKF 0.65 m
-      # ahead of truth and made the goal checker fire 0.95 m early. GPS
-      # (odom0 below) is the position source in the map frame by design.
+      # Wheel odometry is fused as VELOCITY ONLY, never position - that is
+      # how the ROS 1 reference localization_map.yaml does it and how this
+      # file always did. It was briefly removed entirely on 2026-08-26,
+      # which left the filter with no velocity source and made it lag 0.9 m
+      # behind raw GPS at motion onset - worse than the sensor. Measured
+      # 2026-08-26 on a logged nav2 goal - skid-steer wheel odometry
+      # over-counted distance by 46% in the curved final approach (2.99 m
+      # truth vs 4.36 m odom), which is why it must never supply position:
+      # only vx, vy, vyaw (index 6,7,11) are fused here (two_d_mode is true
+      # so vz is excluded). GPS (odom1 below) remains the sole position
+      # source in the map frame.
+      odom0: platform/odom
+      odom0_config: [false, false, false,
+                     false, false, false,
+                     true,  true,  false,
+                     false, false, true,
+                     false, false, false]
+      odom0_differential: false
+      odom0_queue_size: 10
 
       # imu0 restored (Task 4 fix session 4): dropping it entirely (fix
       # session 3) was a contaminated experiment - it was tried while
@@ -106,14 +117,15 @@ a200_0000:
       imu0_remove_gravitational_acceleration: true
 
       # robot_localization loads odomN inputs by consecutive index starting
-      # at 0 and silently stops at the first gap - after wheel odometry (the
-      # old odom0) was removed, the GPS at odom1 was never read
-      # (diagnostics: "Neither X nor its velocity is being measured").
-      odom0: odometry/gps            # from navsat_transform_node
-      odom0_config: [true,  true,  false,
+      # at 0 and silently stops at the first gap - odom0 above is wheel
+      # velocity, so GPS must be odom1 (a gap here means it would never be
+      # read; diagnostics would show "Neither X nor its velocity is being
+      # measured").
+      odom1: odometry/gps            # from navsat_transform_node
+      odom1_config: [true,  true,  false,
                      false, false, false,
                      false, false, false,
                      false, false, false,
                      false, false, false]
-      odom0_differential: false
-      odom0_queue_size: 10
+      odom1_differential: false
+      odom1_queue_size: 10
