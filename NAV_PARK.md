@@ -56,7 +56,9 @@ Reached goals land on the goal exactly - measured gap 0.000 m, path
 length 1.01x straight line, zero lethal cells on the path.
 
 ## Step 9 - demonstrate local obstacle avoidance
-    python3 tools/check_local_avoidance.py
+Run from the repo root (`cd ~/Documents/Husky_viz`); the module form is
+required because this tool imports `tools.nav_goal`.
+    python3 -m tools.check_local_avoidance
 Gate: prints `PASS`. Drives at a small tree the prior map omits and
 measures the closest approach; must stay above 1.89 m.
 

@@ -30,18 +30,19 @@ import time
 
 NS = "/a200_0000"
 # Must match launch/nav_park.launch.py's LIFECYCLE_NODES exactly, in order:
-# a single lifecycle_manager_navigation brings all thirteen up, map nodes
+# a single lifecycle_manager_navigation brings all ten up, map nodes
 # first (ruling D4, 2026-08-26 - the former separate lifecycle_manager_maps
 # raced nav2's own manager and stalled with map_server inactive while
 # planner_server went active). Extended 2026-08-26 after collision_monitor's
 # absence from this list let a READY report pass with the cmd_vel output
 # chain silently broken downstream of controller_server (task 6 fix cycle,
 # defect A).
+# Trimmed 2026-08-27: route_server, smoother_server and docking_server were
+# removed from the launch file as unused.
 LIFECYCLE = ["map_server", "filter_mask_server", "costmap_filter_info_server",
-             "controller_server", "smoother_server", "planner_server",
-             "route_server", "behavior_server", "velocity_smoother",
-             "collision_monitor", "bt_navigator", "waypoint_follower",
-             "docking_server"]
+             "controller_server", "planner_server", "behavior_server",
+             "velocity_smoother", "collision_monitor", "bt_navigator",
+             "waypoint_follower"]
 
 
 def sh(cmd: str, timeout: float = None) -> str:

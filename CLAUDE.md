@@ -94,7 +94,6 @@ cd ~/Documents/Husky_viz
 
 ~/run_husky_sim.sh                     # warehouse_ext (compass + radio)
 ~/run_husky_sim.sh warehouse_ramp      # + 15 deg ramp for terrain tests
-~/run_husky_sim.sh warehouse_ext true  # with rviz
 
 python3 tools/check_all_sensors.py     # confirm every stream is live
 ```
@@ -503,8 +502,10 @@ manually for both controllers with `--switch-timeout 30`) is **UNTESTED** —
 the failure has never been reproduced on demand.
 
 **28. The prior park map deliberately omits the 15 `arbol4` small trees**
-(3.10 m across, 4.11 m tall) so the local costmap has to avoid them from live
-lidar (`tools/generate_park_maps.py`). A tree missing from
+(3.10 m across, 4.11 m tall) so they have to be avoided from live lidar
+(`tools/generate_park_maps.py`). Both costmaps mark them once they are in
+lidar range — the global costmap's obstacle layer lets the planner route
+around them, and the local costmap plus MPPI handles the close-in reaction. A tree missing from
 `maps/park_map.pgm` is intended, not a generator bug. `tree_8` (12.9 m) and
 all man-made objects are mapped.
 
@@ -516,6 +517,20 @@ them. True of the original ROS 1 world too.
 terrain.** A lidar ray past the edge returns max range, which the costmap
 reads as free space and actively *clears*. The void cannot be sensed (see
 gotcha #25 — neither ported world has a ground plane).
+
+**Raised on 2026-08-27:** both scan sources in `config/nav2_park.yaml` (the
+global `obstacle_layer` and the local `voxel_layer`) went from the stock
+indoor `obstacle_max_range 2.5` / `raytrace_max_range 3.0` to **20.0 / 25.0**,
+matching the 2D lidar's measured `range_max 25.0` (mark below range_max so
+no-return readings are not hits; clear at least as far as you mark). It was
+needed because the global costmap is `rolling_window: false` and fixed in
+`map`, so raytrace clearing is its only removal mechanism — at 3.0 m a lethal
+cell was unclearable once the robot moved 3 m away, and a box 6.0 m dead ahead
+in clear line of sight produced 0 lethal cells, marking only at 2.15 m.
+The side effect is exactly this gotcha: clearing over the void beyond the
+terrain edge is now far more aggressive than at 3.0 m. `keepout_filter` is a
+separate costmap filter and should still keep the planner on the terrain —
+that assumption is now the thing to watch.
 
 **31. Nav2 costmap filter and static-layer topics must be absolute.**
 Relative names resolve inside the costmap node
@@ -548,8 +563,11 @@ enabled and simply never mark. Verified live 2026-08-26 in park — both costmap
 had received no scan at all while the lidar showed 50 returns on a tree trunk
 0.2 m ahead, i.e. obstacle avoidance was silently inert. Fixed in
 `config/nav2_park.yaml` by writing `/a200_0000/sensors/lidar2d_0/scan`. Same
-trap as #31, one layer type further in. (Since 2026-08-27 only the local
-costmap carries a sensor layer — the global costmap is static by design.)
+trap as #31, one layer type further in. **Both** costmaps carry a sensor
+layer: the local costmap's `voxel_layer` and the global costmap's
+`obstacle_layer`, each written with the absolute topic. (A short-lived
+2026-08-27 experiment stripped the sensor layer from the global costmap; it was
+reversed the same day in favour of the stock nav2 / Clearpath arrangement.)
 
 **`collision_monitor` is NOT affected** — it is an ordinary node, not a costmap
 sub-node, so its relative `sensors/lidar2d_0/scan` correctly resolves to

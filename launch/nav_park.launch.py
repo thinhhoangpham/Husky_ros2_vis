@@ -70,22 +70,20 @@ RVIZ_CONFIG = os.path.join(REPO, "config", "nav_park.rviz")
 
 # Strict startup order for the single lifecycle manager. The three map nodes
 # come first so the map and the keepout mask are published and latched before
-# planner_server/controller_server build their costmaps. The remaining ten are
-# navigation_launch.py's `lifecycle_nodes`, in its order.
+# planner_server/controller_server build their costmaps. The remaining seven are
+# navigation_launch.py's `lifecycle_nodes`, in its order, minus route_server,
+# smoother_server and docking_server (removed 2026-08-27 as unused).
 LIFECYCLE_NODES = [
     "map_server",
     "filter_mask_server",
     "costmap_filter_info_server",
     "controller_server",
-    "smoother_server",
     "planner_server",
-    "route_server",
     "behavior_server",
     "velocity_smoother",
     "collision_monitor",
     "bt_navigator",
     "waypoint_follower",
-    "docking_server",
 ]
 
 # navigation_launch.py's remappings: map the fully qualified /tf names to
@@ -166,9 +164,7 @@ def generate_launch_description() -> LaunchDescription:
 
             nav2_node("nav2_controller", "controller_server",
                       extra_remaps=[("cmd_vel", "cmd_vel_nav")]),
-            nav2_node("nav2_smoother", "smoother_server", "smoother_server"),
             nav2_node("nav2_planner", "planner_server", "planner_server"),
-            nav2_node("nav2_route", "route_server", "route_server"),
             nav2_node("nav2_behaviors", "behavior_server", "behavior_server",
                       extra_remaps=[("cmd_vel", "cmd_vel_nav")]),
             nav2_node("nav2_bt_navigator", "bt_navigator", "bt_navigator"),
@@ -176,7 +172,6 @@ def generate_launch_description() -> LaunchDescription:
             nav2_node("nav2_velocity_smoother", "velocity_smoother", "velocity_smoother",
                       extra_remaps=[("cmd_vel", "cmd_vel_nav")]),
             nav2_node("nav2_collision_monitor", "collision_monitor", "collision_monitor"),
-            nav2_node("opennav_docking", "opennav_docking", "docking_server"),
         ]),
 
         # Optional view. Its own group: it needs the namespace and the tf

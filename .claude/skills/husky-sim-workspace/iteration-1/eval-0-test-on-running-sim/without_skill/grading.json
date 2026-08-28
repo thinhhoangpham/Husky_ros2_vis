@@ -1,0 +1,16 @@
+{
+  "expectations": [
+    {"text": "Requires a full CLEAN_SIM.md cycle before testing, even though the sim is described as already running",
+     "passed": false,
+     "evidence": "It offers the clean cycle only as one of three options the user picks between - \"(a) run the read-only precondition checks below against the sim you have up and proceed only if it is at that pose, (b) do the full clean restart cycle first\" - and its Step 0 through Step 5 plan is written to run against the live sim. It never requires the cycle."},
+    {"text": "Names the concrete clean gate values (opt/ros : 0 and shm : 0) as a precondition to launching",
+     "passed": false,
+     "evidence": "Neither 'opt/ros' nor 'shm' appears anywhere in the response; CLEAN_SIM.md is referred to only by name, with no gate values."},
+    {"text": "Sources the box-spawn and goal steps from a runbook (DEMO.md / NAV_PARK.md) rather than composing an ad-hoc sequence",
+     "passed": true,
+     "evidence": "\"This exact test already exists as a written procedure: DEMO.md -> 'Demo: local costmap avoids an unmapped box (park)' (Steps 1-6)... I would follow it verbatim rather than improvise a box spawn\", reusing (14, -0.66) and (27.12, 1.10)."},
+    {"text": "Does not treat 'the sim is already up' as permission to skip straight to the test",
+     "passed": true,
+     "evidence": "\"So my first action is to ask, not to run\" - it raises two blockers (unknown start pose, unknown launch config) and refuses to spawn the box before the user answers."}
+  ]
+}

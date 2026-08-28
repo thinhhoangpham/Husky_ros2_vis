@@ -175,9 +175,15 @@ local_costmap:
           clearing: true
           marking: true
           data_type: "LaserScan"
-          raytrace_max_range: 3.0
+          # 2026-08-27: raised from the stock indoor 3.0/2.5 to match the
+          # sensor - the 2D lidar reports range_max 25.0, range_min 0.05,
+          # FOV +/-135 deg. Mark at 20 m, below range_max, so max-range
+          # no-return readings are not treated as hits; clear at 25 m,
+          # >= the marking range, since the eraser must reach at least as
+          # far as the marker. Kept identical to the global obstacle_layer.
+          raytrace_max_range: 25.0
           raytrace_min_range: 0.0
-          obstacle_max_range: 2.5
+          obstacle_max_range: 20.0
           obstacle_min_range: 0.0
       static_layer:
         plugin: "nav2_costmap_2d::StaticLayer"
@@ -201,21 +207,65 @@ global_costmap:
       height: 60
       origin_x: -55.0
       origin_y: -31.55
-      # The global costmap is deliberately static: prior map
-      # (maps/park_map.pgm) + keepout mask + inflation, no live sensor layer.
-      # Design decision 2026-08-27 - the prior map is the planning authority and
-      # the local costmap owns live obstacles. Consequence, stated explicitly:
-      # the planner never learns obstacles absent from the prior map (the 15
-      # arbol4 trees are excluded from it by design, gotcha #28), so it plans
-      # straight through them and the local costmap + MPPI must dodge - which is
-      # the intended demonstration. Clearpath stock includes obstacle_layer
-      # here; this is a deliberate deviation.
-      plugins: ["static_layer", "inflation_layer"]
+      # The global costmap carries a live obstacle layer, matching stock nav2
+      # and Clearpath: prior map (maps/park_map.pgm) + live scan + keepout mask
+      # + inflation. Decision 2026-08-27 - this SUPERSEDES the earlier
+      # same-day "static global costmap" decision, which removed the sensor
+      # layer. Consequence: the planner now learns obstacles absent from the
+      # prior map (the 15 arbol4 trees are excluded from it by design, gotcha
+      # #28, as is anything spawned at runtime) and replans around them, rather
+      # than planning straight through and leaving all avoidance to the local
+      # costmap + MPPI. The keepout filter stays - it is the only thing
+      # stopping the planner routing off the edge of the terrain (gotcha #30),
+      # since a lidar ray past the edge returns max range and reads as free.
+      plugins: ["static_layer", "obstacle_layer", "inflation_layer"]
       filters: ["keepout_filter"]
       keepout_filter:
         plugin: "nav2_costmap_2d::KeepoutFilter"
         enabled: True
         filter_info_topic: "/a200_0000/costmap_filter_info"
+      # Absolute topic, deliberately - same trap as the local costmap's
+      # voxel_layer above. A relative "sensors/..." resolves inside the costmap
+      # sub-node (/a200_0000/global_costmap/sensors/lidar2d_0/scan), binds to
+      # zero publishers, and the layer silently never marks (gotcha #36).
+      obstacle_layer:
+        plugin: "nav2_costmap_2d::ObstacleLayer"
+        enabled: true
+        observation_sources: scan
+        scan:
+          topic: /a200_0000/sensors/lidar2d_0/scan
+          max_obstacle_height: 2.0
+          clearing: true
+          marking: true
+          data_type: "LaserScan"
+          # 2026-08-27: raised from the stock indoor 3.0/2.5 to match the
+          # sensor - the 2D lidar reports range_max 25.0, range_min 0.05,
+          # FOV +/-135 deg. Mark at 20 m, below range_max, so max-range
+          # no-return readings are not treated as hits; clear at 25 m,
+          # >= the marking range, since the eraser must reach at least as
+          # far as the marker.
+          #
+          # This matters here more than on the local costmap: this one is
+          # rolling_window false, 110x60 m, fixed in the map frame, so no
+          # cell ever scrolls out of it and raytrace clearing is the ONLY
+          # removal mechanism. At the stock 3.0 m a lethal cell could never
+          # be cleared once the robot was more than 3 m away, so transient
+          # obstacles persisted permanently. The local costmap escapes this
+          # because its 5x5 m rolling window discards cells as the robot
+          # moves. Measured: with a box 6.0 m dead ahead of a stationary
+          # robot in clear line of sight, this costmap read 0 lethal cells;
+          # it only marked at 2.15 m range (0 -> 371 lethal, max cost 100).
+          #
+          # Known risk (gotcha #30): a ray past the terrain edge returns max
+          # range, which the costmap reads as free and actively clears, so
+          # 25 m clearing is far more aggressive over the void beyond the
+          # boundary than 3.0 m was. keepout_filter is a separate costmap
+          # filter and should still stop the planner routing off the
+          # terrain - this is the thing to watch.
+          raytrace_max_range: 25.0
+          raytrace_min_range: 0.0
+          obstacle_max_range: 20.0
+          obstacle_min_range: 0.0
       static_layer:
         plugin: "nav2_costmap_2d::StaticLayer"
         map_subscribe_transient_local: true

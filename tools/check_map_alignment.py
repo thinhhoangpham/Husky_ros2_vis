@@ -6,13 +6,16 @@ in the wrong place, so the robot swerves around empty air and clips real
 trunks. This measures the disagreement instead of eyeballing RViz.
 
 Method: take one 2D lidar scan, convert each return to a map cell via TF, and
-report what fraction land on cells the prior map calls occupied.
+report what fraction land on cells the prior map calls occupied. Acquisition of
+that first scan and transform is bounded by a wall-clock deadline, not an
+iteration count.
 
 Usage:  python3 tools/check_map_alignment.py
 """
 
 import math
 import sys
+import time
 
 import numpy as np
 import rclpy
@@ -27,12 +30,17 @@ MAP_YAML = "/home/thinhpham/Documents/Husky_viz/maps/park_map.yaml"
 SCAN = "/a200_0000/sensors/lidar2d_0/scan"
 TOLERANCE_CELLS = 6      # 0.30 m at 0.05 m/cell
 MIN_HIT_FRACTION = 0.60
+# First scan delivery was measured at 2.5 s on this stack with RViz running
+# (~60% of a core). 15 s is ~6x that, so ordinary load variation cannot turn a
+# healthy stack into a failure, while a genuinely dead topic still reports fast.
+ACQUIRE_SECONDS = 15.0
 
 
 class ScanProbe(Node):
     def __init__(self) -> None:
         super().__init__("check_map_alignment")
         self.scan: LaserScan | None = None
+        self.tf_error: str | None = None
         self.buf = Buffer()
         TransformListener(self.buf, self)
         self.create_subscription(LaserScan, SCAN, self._cb, qos_profile_sensor_data)
@@ -41,17 +49,27 @@ class ScanProbe(Node):
         self.scan = msg
 
     def grab(self):
-        for _ in range(80):
-            rclpy.spin_once(self, timeout_sec=0.5)
+        """Spin until a scan and its map transform are both in hand, or ACQUIRE_SECONDS.
+
+        spin_once returns on the FIRST ready callback of any kind, and the
+        TransformListener's /tf callbacks fire far faster than any timeout, so
+        an iteration count is not a time budget: 80 iterations burn through in
+        ~1.35 s on this stack, before the first scan (~2.5 s) ever arrives.
+        Bound the window by the wall clock instead.
+        """
+        deadline = time.monotonic() + ACQUIRE_SECONDS
+        while time.monotonic() < deadline:
+            rclpy.spin_once(self, timeout_sec=0.1)
             if self.scan is None:
                 continue
             try:
                 tf = self.buf.lookup_transform("map", self.scan.header.frame_id,
                                                rclpy.time.Time())
                 return self.scan, tf
-            except Exception:
+            except Exception as exc:
+                self.tf_error = str(exc)
                 continue
-        return None, None
+        return self.scan, None
 
 
 def main() -> int:
@@ -74,12 +92,23 @@ def main() -> int:
     node = ScanProbe()
     try:
         scan, tf = node.grab()
+        tf_error = node.tf_error
     finally:
         node.destroy_node()
         rclpy.shutdown()
 
     if scan is None:
-        print("  FAIL: no scan or no map->laser transform")
+        print(f"  FAIL: no scan received within {ACQUIRE_SECONDS:.0f} s on {SCAN}")
+        print("        check the publisher: ros2 topic info -v " + SCAN)
+        return 1
+
+    if tf is None:
+        print(f"  FAIL: scan received, but map -> {scan.header.frame_id} never resolved"
+              f" within {ACQUIRE_SECONDS:.0f} s")
+        print(f"        last TF error: {tf_error}")
+        print("        check the chain map -> odom -> base_link -> "
+              f"{scan.header.frame_id}; a missing map -> odom means localization "
+              "is not publishing yet")
         return 1
 
     t = tf.transform.translation

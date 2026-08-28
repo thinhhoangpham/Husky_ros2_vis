@@ -15,6 +15,7 @@ import rclpy
 from geometry_msgs.msg import PoseStamped
 from nav2_msgs.action import NavigateToPose
 from rclpy.action import ActionClient
+from rclpy.executors import SingleThreadedExecutor
 from rclpy.node import Node
 
 TERRAIN = (-50.0, 50.0, -26.55, 23.45)
@@ -40,6 +41,14 @@ class GoalSender(Node):
     def __init__(self) -> None:
         super().__init__("nav_goal")
         self.client = ActionClient(self, NavigateToPose, f"/{NS}/navigate_to_pose")
+        # A dedicated executor, not rclpy's implicit global one: check_local_avoidance
+        # spins its tracker node in the main thread while send() runs in a worker,
+        # and one executor entered from two threads raises "Executor is already
+        # spinning". Single-node, single-thread callers are unaffected.
+        self._exec = SingleThreadedExecutor()
+        self._exec.add_node(self)
+        self._handle = None
+        self._goal_fut = None
 
     def send(self, pose: PoseStamped) -> int:
         if not self.client.wait_for_server(timeout_sec=10.0):
@@ -50,15 +59,17 @@ class GoalSender(Node):
         pose.header.stamp = self.get_clock().now().to_msg()
         goal.pose = pose
         print(f"  sending goal: x {pose.pose.position.x:.2f}  y {pose.pose.position.y:.2f}")
-        fut = self.client.send_goal_async(goal)
-        rclpy.spin_until_future_complete(self, fut)
+        fut = self._goal_fut = self.client.send_goal_async(goal)
+        self._exec.spin_until_future_complete(fut)
         handle = fut.result()
         if handle is None or not handle.accepted:
             print("  FAIL: goal rejected by the action server")
             return 1
+        self._handle, self._goal_fut = handle, None
         print("  goal accepted, navigating...")
         res_fut = handle.get_result_async()
-        rclpy.spin_until_future_complete(self, res_fut)
+        self._exec.spin_until_future_complete(res_fut)
+        self._handle = None
         status = res_fut.result().status
         # action_msgs/GoalStatus: 4 = SUCCEEDED
         if status == 4:
@@ -66,6 +77,38 @@ class GoalSender(Node):
             return 0
         print(f"  FAIL: navigation ended with status {status}")
         return 1
+
+    def cancel(self) -> None:
+        """Cancel a goal this sender accepted but never awaited to completion.
+
+        No-op unless send() left a goal in flight (i.e. it raised between
+        acceptance and the result). Without this, a crash leaves nav2 driving
+        the robot unattended.
+        """
+        handle, self._handle = self._handle, None
+        if handle is None and self._goal_fut is not None:
+            # send() raised before it read the acceptance: the goal request was
+            # still transmitted, so resolve the handle now rather than leave a
+            # goal nav2 has accepted but nobody owns.
+            fut, self._goal_fut = self._goal_fut, None
+            try:
+                self._exec.spin_until_future_complete(fut, timeout_sec=10.0)
+                handle = fut.result()
+            except Exception as exc:                   # noqa: BLE001 - best effort
+                print(f"  WARN: could not resolve the in-flight goal: {exc}")
+        if handle is None or not handle.accepted:
+            return
+        print("  cancelling the in-flight goal")
+        try:
+            self._exec.spin_until_future_complete(handle.cancel_goal_async(),
+                                                  timeout_sec=10.0)
+        except Exception as exc:                       # noqa: BLE001 - best effort
+            print(f"  WARN: cancel failed: {exc}")
+
+    def destroy_node(self) -> bool:
+        self._exec.remove_node(self)
+        self._exec.shutdown()
+        return super().destroy_node()
 
 
 def main() -> int:

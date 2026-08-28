@@ -1,12 +1,3 @@
-# Copy of clearpath_gz/launch/gz_sim.launch.py with this repo's models/
-# directory prepended to GZ_SIM_RESOURCE_PATH.
-#
-# Why a copy: clearpath_gz's version OVERWRITES GZ_SIM_RESOURCE_PATH with
-# SetEnvironmentVariable (it does not append), so exporting the variable in
-# scripts/run_husky_sim.sh has no effect - the value is discarded before
-# `gz sim` is spawned. Custom worlds that reference model:// meshes outside
-# the ROS install tree (worlds/park.sdf) therefore need the path injected
-# here. See launch/sim_compass.launch.py, which points at this file.
 # Copyright 2023 Clearpath Robotics, Inc.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -118,13 +109,9 @@ def generate_launch_description():
     packages_paths = [os.path.join(p, 'share') for p in os.getenv('AMENT_PREFIX_PATH').split(':')]
 
     # Set ignition resource path to include all sourced ros packages
-    # Custom Gazebo models live in this repo, outside any ROS package.
-    husky_viz_models = '/home/thinhpham/Documents/Husky_viz/models'
-
     gz_sim_resource_path = SetEnvironmentVariable(
         name='GZ_SIM_RESOURCE_PATH',
         value=[
-            husky_viz_models + ':',
             os.path.join(pkg_clearpath_gz, 'worlds') + ':',
             os.path.join(pkg_clearpath_gz, 'meshes') + ':',
             ':' + ':'.join(packages_paths)])

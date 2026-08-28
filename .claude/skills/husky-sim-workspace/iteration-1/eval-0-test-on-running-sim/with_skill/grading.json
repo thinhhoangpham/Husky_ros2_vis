@@ -1,0 +1,16 @@
+{
+  "expectations": [
+    {"text": "Requires a full CLEAN_SIM.md cycle before testing, even though the sim is described as already running",
+     "passed": true,
+     "evidence": "\"the running sim must be torn down and the full cycle re-run\"; Phase 1 of the plan is CLEAN_SIM.md Steps 1-4 in full, and option 2 (leave the sim alone) is explicitly 'no measurement is possible'."},
+    {"text": "Names the concrete clean gate values (opt/ros : 0 and shm : 0) as a precondition to launching",
+     "passed": true,
+     "evidence": "Step 3 GATE block: \"echo \\\"opt/ros : ...\\\" / echo \\\"shm : ...\\\"  Must show: no process lines, opt/ros : 0, shm : 0\", including the transient-nonzero re-read rule."},
+    {"text": "Sources the box-spawn and goal steps from a runbook (DEMO.md / NAV_PARK.md) rather than composing an ad-hoc sequence",
+     "passed": true,
+     "evidence": "\"The test you are asking for exists as a runbook block: DEMO.md -> 'Demo: local costmap avoids an unmapped box (park)'\"; Phase 4 reproduces its Steps 1-6 with the runbook's own coordinates (14, -0.66) and goal (27.12, 1.10), and refuses to improvise coordinates."},
+    {"text": "Does not treat 'the sim is already up' as permission to skip straight to the test",
+     "passed": true,
+     "evidence": "\"I cannot run this test against the sim that is currently up, and I am stopping to ask before anything is executed\" plus the quoted rule \"A second test on a world that already has a spawned object... is not the same test\"."}
+  ]
+}

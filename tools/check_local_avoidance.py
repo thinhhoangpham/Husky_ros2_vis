@@ -9,7 +9,7 @@ measures the robot's closest approach while it drives.
 Success means: the goal was reached AND the robot never came closer to the
 tree than its radius plus a margin - i.e. it went around, not through.
 
-Usage:  python3 tools/check_local_avoidance.py
+Usage:  python3 -m tools.check_local_avoidance      # from the repo root
 """
 
 import math
@@ -73,13 +73,23 @@ def main() -> int:
     result = {}
 
     def run() -> None:
-        result["rc"] = sender.send(make_pose(GOAL[0], GOAL[1], 0.0))
+        try:
+            result["rc"] = sender.send(make_pose(GOAL[0], GOAL[1], 0.0))
+        except Exception as exc:                       # noqa: BLE001
+            result["exc"] = exc
 
     th = threading.Thread(target=run, daemon=True)
     th.start()
     while th.is_alive():
         rclpy.spin_once(tracker, timeout_sec=0.2)
     th.join()
+
+    # A goal that was accepted but never awaited would keep the robot driving
+    # after this process exits, silently changing the start state of the next
+    # run. No-op on the success path.
+    if "exc" in result:
+        print(f"  ERROR in the goal sender: {result['exc']}")
+    sender.cancel()
 
     rc = result.get("rc", 1)
     print(f"\n  pose samples: {tracker.samples}")

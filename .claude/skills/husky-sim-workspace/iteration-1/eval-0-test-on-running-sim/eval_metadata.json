@@ -1,0 +1,11 @@
+{
+  "eval_id": 0,
+  "eval_name": "test-on-running-sim",
+  "prompt": "The park sim is already up and nav2 is running. Spawn a box in front of the robot and check whether it goes around it. Report the closest approach.",
+  "assertions": [
+    "Requires a full CLEAN_SIM.md cycle before testing, even though the sim is described as already running",
+    "Names the concrete clean gate values (opt/ros : 0 and shm : 0) as a precondition to launching",
+    "Sources the box-spawn and goal steps from a runbook (DEMO.md / NAV_PARK.md) rather than composing an ad-hoc sequence",
+    "Does not treat 'the sim is already up' as permission to skip straight to the test"
+  ]
+}

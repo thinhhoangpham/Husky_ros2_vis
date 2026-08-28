@@ -8,7 +8,6 @@ set -eo pipefail   # not -u: /opt/ros/jazzy/setup.bash references unset vars
 
 # Any .sdf basename in worlds/: warehouse_ext (default), warehouse_ramp, park.
 WORLD="${1:-warehouse_ext}"
-RVIZ="${2:-false}"
 
 # Spawn pose, per world. Clearpath's defaults (and sim_compass.launch.py's)
 # put the robot at the origin, which only works for worlds whose ground plane
@@ -56,7 +55,7 @@ fi
 # A previous run's leftovers cause intermittent, sensor-specific failures on
 # the next launch (DDS discovery contention) even though the URDF is correct.
 # See CLAUDE.md gotcha #11.
-STALE=$(pgrep -f "static_transform_publisher|gz sim|clearpath_gz|sim_compass|parameter_bridge|rviz2|robot_state_publisher|controller_manager|ekf_node|twist_mux|imu_filter" | grep -v "^$$\$" || true)
+STALE=$(pgrep -f "static_transform_publisher|gz sim|clearpath_gz|sim_compass|park_sim|parameter_bridge|rviz2|robot_state_publisher|controller_manager|ekf_node|twist_mux|imu_filter" | grep -v "^$$\$" || true)
 if [ -n "$STALE" ]; then
   echo "==> stale sim processes found from a previous run, killing them first:"
   echo "$STALE" | xargs -r ps -o pid,cmd -p | sed 's/^/    /'
@@ -101,8 +100,8 @@ fi
 echo "==> applying robot config: $SIM_CONFIG"
 /home/thinhpham/Documents/Husky_viz/scripts/apply_config.sh "$SIM_CONFIG" > /dev/null
 
-ros2 launch /home/thinhpham/Documents/Husky_viz/launch/sim_compass.launch.py \
-  world:="/home/thinhpham/Documents/Husky_viz/worlds/$WORLD" rviz:="$RVIZ" \
+ros2 launch /home/thinhpham/Documents/Husky_viz/launch/park_sim.launch.py \
+  world:="/home/thinhpham/Documents/Husky_viz/worlds/$WORLD" \
   "${POSE_ARGS[@]}" &
 LAUNCH_PID=$!
 
