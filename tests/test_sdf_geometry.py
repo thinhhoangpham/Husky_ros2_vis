@@ -1,3 +1,5 @@
+import xml.etree.ElementTree as ET
+
 import numpy as np
 
 from tools.sdf_geometry import load_mesh, pose_matrix, world_triangles
@@ -18,12 +20,23 @@ def test_load_mesh_terrain_is_unit_normalised():
     assert np.isclose(V[:, 1].max(), 1.0, atol=1e-6)
 
 
-def test_load_mesh_y_up_is_converted_to_z_up():
-    """arbol4/tronco4.dae is Y_UP; a tree trunk must be tall in z, not in y."""
-    V, _ = load_mesh(f"{REPO}/models/arbol4/tronco4.dae")
+def test_load_mesh_does_not_apply_collada_up_axis():
+    """linea1/postes_lowpoly.dae declares Y_UP, but load_mesh must NOT rotate it.
+    gz-sim ignores <up_axis> for these assets, and the loader matches the
+    simulator, not the COLLADA spec: converting lays this 16.5 m pylon on its
+    side and sinks park's 16 benches below the terrain. See
+    tools/sdf_geometry.py:192-201 before "fixing" this (CLAUDE.md gotcha #35)."""
+    path = f"{REPO}/models/linea1/postes_lowpoly.dae"
+    ns = "{http://www.collada.org/2005/11/COLLADASchema}"
+    up = ET.parse(path).getroot().find(f"{ns}asset/{ns}up_axis")
+    assert up is not None and up.text.strip() == "Y_UP", "fixture is no longer Y_UP"
+
+    V, _ = load_mesh(path)
     extent = V.max(axis=0) - V.min(axis=0)
-    assert extent[2] > extent[0], f"trunk not tallest in z: {extent}"
-    assert extent[2] > extent[1], f"trunk not tallest in z: {extent}"
+    # As authored (unconverted): y=120.0, z=549.6, i.e. z is 4.58x y. A
+    # Y_UP->Z_UP conversion swaps them, making z 0.22x y -- wrong by the same
+    # 4.58x. Comparing them directly is the threshold centred between the two.
+    assert extent[2] > extent[1], f"up_axis appears to have been applied: {extent}"
 
 
 def test_pose_matrix_translation_and_yaw():
