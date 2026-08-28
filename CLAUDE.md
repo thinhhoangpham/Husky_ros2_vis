@@ -206,17 +206,21 @@ placements come from each source world's `<state>` block (gotcha #16), verbatim.
 | models | 97 | 79 |
 | ground z | ≈2.99 (flat) | 3.5–5.9 (relief 2.43 m, max slope 21°) |
 | spawn (x y z yaw) | `45.64 0.02 3.3 2.6132` | `-47 -15 4.0 0` |
-| datum | 49.9 N, 8.9 E, `heading_deg` 90 (source dataset, since 2026-08-26) | lat/lon 0 (source) |
-| orientation | +x North, +y West; spawn 4.36 m inside the north edge heading southwest, ~95 m of run south | — |
-| compass/radio | **no** | **no** |
+| datum | 49.9 N, 8.9 E, `heading_deg` **0** (see gotcha #32) | lat/lon 0, `heading_deg` 0 (source) |
+| orientation | world frame **is ENU**: +x East, +y North (verified live to 0.0001°); spawn 4.36 m inside the +x edge, ~95 m of run toward −x | world frame is ENU |
+| compass/radio | **yes** (`park.sdf:16-17`) | **no** |
 
-park's datum was Rio (user choice) before 2026-08-26; any GPS fix recorded
-before that date is invalid against the current world. lake still uses Rio.
+park's datum was Rio (user choice) before 2026-08-26, and its `heading_deg`
+was 90 until 2026-08-27. Any GPS fix or lat/lon recorded before those dates is
+invalid against the current world — see gotcha #32. lake's datum is lat/lon 0,
+not Rio.
 
-Neither carries `Magnetometer`/`RFComms`, so `robot_full.yaml`'s compass and
-radio are silent there; every other sensor works. Only `warehouse_ext` /
-`warehouse_ramp` have those systems — and note `warehouse_ramp` contains only a
-`ground_plane`, so lake is the first surface in this project with real slopes.
+**park carries `Magnetometer` and `RFComms`** (`park.sdf:16-17`), so
+`robot_full.yaml`'s compass and radio work there. **lake carries neither**
+(`lake.sdf` has only `Imu` and `NavSat`), so they are silent on lake. All six
+stock Clearpath worlds also lack them, and `warehouse_ext` / `warehouse_ramp`
+have them — note `warehouse_ramp` contains only a `ground_plane`, so lake is
+the first surface in this project with real slopes.
 
 Meshes live in `models/` — real copies, never symlinks (a dead symlink into
 `/home/thinh/...` broke the first attempt). Visual and collision geometry point
@@ -342,9 +346,16 @@ and never looks at `urdf_enabled`
 (`clearpath_generator_gz/launch/generator.py:206`). So declaring the nearest
 stock model with `urdf_enabled: false` / `launch_enabled: true` yields a
 generated bridge with no duplicate link, while a custom xacro supplies the
-real sensor. GPS uses this (see the GPS section). Compass and radio still ride
-on the explicit `ros_gz_bridge` call in `scripts/run_husky_sim.sh`, and could
-be converted the same way.
+real sensor. GPS uses this (see the GPS section). `imu_enu` instead gets an
+explicit `ros_gz_bridge` node inside `launch/gps_localization.launch.py` — the
+stage that consumes it — because declaring it as a stock `imu_1` would make the
+generator fuse it into the *local* EKF too
+(`clearpath_generator_common/param/platform.py:705-732`), double-counting yaw
+rate in `odom -> base_link`. Compass and radio still ride on the explicit
+`ros_gz_bridge` call in `scripts/run_husky_sim.sh`, and could be converted the
+same way. **`run_husky_sim.sh` also still bridges `imu_enu`**, so running that
+script alongside the nav stack yields two publishers on that topic — use the
+`RUN_SIM.md` launch path instead.
 
 **8. Killing a `ros2` CLI command with `timeout` trips Ubuntu's apport dialog**
 ("ros2 has stopped unexpectedly"). Cosmetic — the CLI does not unwind on SIGTERM.
@@ -621,10 +632,23 @@ Relative names resolve inside the costmap node
 (`/a200_0000/global_costmap/...`) and silently never bind — the filter logs
 `Filter mask was not received` and the prior map is simply absent.
 
-**32. park's datum changed on 2026-08-26** from Rio to the source dataset's
-49.9 N, 8.9 E, and `heading_deg` is now 90, so +x is North and +y is West.
-Any GPS fix recorded before that date is invalid. The warehouse worlds still
-use Rio.
+**32. park's geodetic frame has changed twice; anything stored as lat/lon
+has a shelf life.** On 2026-08-26 the datum moved from Rio to the source
+dataset's 49.9 N, 8.9 E. On **2026-08-27 `heading_deg` went 90 → 0**, which
+does not move the datum but rotates the world→geodetic mapping 90° about it —
+so every point away from the origin gets a different lat/lon (up to 54 m for
+`routes/park_route_1.yaml`'s furthest waypoint). Under `heading_deg 0` the
+Gazebo world frame **is** the ENU frame: **+x East, +y North**, verified live
+(`imu_enu` yaw matched Gazebo world yaw to 0.0001°). This is what every stock
+Clearpath world declares, and it is why the ENU→map rotation relay was deleted
+and `navsat_transform`'s `yaw_offset` is `0.0`.
+
+World x/y are unaffected by any of this, and so are `maps/*.pgm`, the keepout
+mask and the spawn poses. Only literal lat/lon goes stale — regenerate it from
+world x/y through `navsat_transform`'s `toLL` service rather than by hand.
+`tools/nav_goal_ll.py` converts through `fromLL` and so self-updates; it also
+refuses a converted point outside the terrain (`nav_goal.py:25`), which is the
+guard that catches a stale waypoint. The warehouse worlds still use Rio.
 
 **33. The `ros2 control` CLI is not installed on this machine.** Query
 controller state via the `controller_manager` service directly (see gotcha

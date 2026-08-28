@@ -3,21 +3,28 @@
 Runs alongside, and never replaces, the Clearpath-generated ekf_node that
 owns odom -> base_link.
 
+Topology matches the canonical Nav2 reference
+(navigation2_tutorials/nav2_gps_waypoint_follower_demo): navsat_transform
+consumes the GLOBAL filter's own estimate, and with use_odometry_yaw true it
+takes heading from that estimate rather than from an IMU subscription.
+ekf_node_map fuses the ENU-referenced imu_enu directly - park.sdf is
+heading_deg 0, so the Gazebo world frame IS the ENU frame and no rotation
+relay is needed.
+
 Ruling D3: the Clearpath stack remaps /tf and /tf_static to namespaced
 topics throughout (clearpath_control/control.launch.py,
 clearpath_control/localization.launch.py, the generated
-platform-service.launch.py). Both nodes below must remap /tf and
-/tf_static to the namespaced topics too, or ekf_node_map's map -> odom
-publish lands on a topic nothing else in this stack reads.
+platform-service.launch.py). Both robot_localization nodes below must remap
+/tf and /tf_static to the namespaced topics too, or ekf_node_map's
+map -> odom publish lands on a topic nothing else in this stack reads.
 """
 
 from launch import LaunchDescription
-from launch.actions import DeclareLaunchArgument, ExecuteProcess
+from launch.actions import DeclareLaunchArgument
 from launch.substitutions import LaunchConfiguration
 from launch_ros.actions import Node
 
 CONFIG = "/home/thinhpham/Documents/Husky_viz/config/gps_localization.yaml"
-IMU_RELAY_SCRIPT = "/home/thinhpham/Documents/Husky_viz/tools/imu_map_relay.py"
 NAMESPACE = "a200_0000"
 
 TF_REMAPS = [
@@ -32,17 +39,19 @@ def generate_launch_description() -> LaunchDescription:
     return LaunchDescription([
         DeclareLaunchArgument("use_sim_time", default_value="true"),
 
-        # Rotates the ENU-referenced imu_enu orientation into the Gazebo
-        # world/map frame (+pi/2 about z, park.sdf heading_deg 90) so
-        # ekf_node_map can fuse yaw as an absolute map-frame heading.
-        ExecuteProcess(
-            cmd=[
-                "python3", IMU_RELAY_SCRIPT,
-                "--ros-args",
-                "-r", f"__ns:=/{NAMESPACE}",
-            ],
-            name="imu_map_relay",
+        # imu_enu is a custom sensor (urdf/imu_enu.urdf.xacro), and
+        # Clearpath's generator only bridges sensors declared in robot.yaml
+        # (CLAUDE.md gotcha #7), so it needs its own explicit bridge to reach
+        # ROS at all. It publishes no TF, so no TF_REMAPS here.
+        Node(
+            package="ros_gz_bridge",
+            executable="parameter_bridge",
+            name="imu_enu_gz_bridge",
             output="screen",
+            arguments=[
+                "/a200_0000/sensors/imu_enu/data@sensor_msgs/msg/Imu[gz.msgs.IMU",
+            ],
+            parameters=[{"use_sim_time": use_sim_time}],
         ),
 
         Node(
@@ -53,10 +62,10 @@ def generate_launch_description() -> LaunchDescription:
             output="screen",
             parameters=[CONFIG, {"use_sim_time": use_sim_time}],
             remappings=[
-                # The RAW ENU topic, not sensors/imu_map/data:
-                # navsat_transform expects ENU yaw and applies yaw_offset
-                # itself. Stock imu_0 is spawn-relative (yaw 0.0000 at world
-                # yaw 149.72 deg in park) and was never a world heading.
+                # Unused while use_odometry_yaw is true: heading then comes
+                # from the global EKF's own output, matching the Nav2
+                # reference. Kept so flipping that parameter back works
+                # without re-deriving which topic to point at.
                 ("imu", "sensors/imu_enu/data"),
                 # The RAW fix, matching the ROS 1 reference (which had no
                 # covariance relay): the sim GPS reports all-zero covariance

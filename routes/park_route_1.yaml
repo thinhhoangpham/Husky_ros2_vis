@@ -1,15 +1,24 @@
 # routes/park_route_1.yaml
 #
 # The five waypoints recorded on /navigation/objetive_gps in the original
-# ROS 1 dataset (park_1.bag), verbatim. Valid only against park's datum of
-# 49.9 N, 8.9 E - see worlds/park.sdf.
+# ROS 1 dataset (park_1.bag). The world x/y are the authoritative record of
+# where these points physically are. The lat/lon were REGENERATED on
+# 2026-08-27 from those x/y via navsat_transform's toLL service, after
+# worlds/park.sdf changed heading_deg 90 -> 0.
 #
-# The route runs 76.4 m south from the spawn, down the long axis of the park.
-# world x/y are informational; the lat/lon values are authoritative.
+# Valid only against park's datum of 49.9 N, 8.9 E AND heading_deg 0
+# (see worlds/park.sdf). Under heading_deg 0 the Gazebo world frame is ENU:
+# +x East, +y North - verified live, imu_enu yaw matched Gazebo world yaw to
+# 0.0001 deg. The pre-2026-08-27 lat/lon were recorded under heading_deg 90
+# (+x North, +y West) and named points up to 54 m away; do not reuse them.
+#
+# The waypoints themselves did not move - only their geographic labels did.
+# The route runs 76.4 m from the spawn down the long axis of the park
+# (decreasing x, i.e. westward in the current frame).
 frame: latlon
 waypoints:
-  - {lat: 49.9003439105, lon: 8.89998265669}   # x  38.28  y  1.24
-  - {lat: 49.9002436091, lon: 8.89998465971}   # x  27.12  y  1.10
-  - {lat: 49.9000103866, lon: 8.90003336643}   # x   1.16  y -2.39
-  - {lat: 49.8998565290, lon: 8.90004639993}   # x -15.97  y -3.33
-  - {lat: 49.8997232844, lon: 8.90004804940}   # x -30.80  y -3.45
+  - {lat: 49.9000111471, lon: 8.9005328186}   # x  38.28  y  1.24
+  - {lat: 49.9000098891, lon: 8.9003774828}   # x  27.12  y  1.10
+  - {lat: 49.8999785124, lon: 8.9000161460}   # x   1.16  y -2.39
+  - {lat: 49.8999700610, lon: 8.8997777141}   # x -15.97  y -3.33
+  - {lat: 49.8999689816, lon: 8.8995712958}   # x -30.80  y -3.45
