@@ -56,13 +56,22 @@ sensors:
           imu_frame_id: imu_0_link
           port: /dev/microstrain_main
           use_enu_frame: true
-  # NOTE: gps_0 is NOT declared here. Clearpath's garmin_18x xacro hardcodes
-  # <update_rate>1</update_rate> and exposes no override, so the 2 Hz sensor
-  # is a custom xacro instead: urdf/gps_2hz.urdf.xacro, instantiated from
-  # urdf/extras_default.urdf.xacro with the same name (gps_0), mount
-  # (sensor_arch_mount, xyz 0.0 0.15 0.0) and gz topic. The ROS topic is
-  # unchanged: /a200_0000/sensors/gps_0/fix. Custom sensors are not
-  # auto-bridged (gotcha #7) - the bridge line is in scripts/run_husky_sim.sh.
+  # gps_0 is declared with urdf_enabled: false. Clearpath's garmin_18x xacro
+  # hardcodes <update_rate>1</update_rate> and exposes no override, so the
+  # sensor itself comes from the custom 2 Hz urdf/gps_2hz.urdf.xacro,
+  # instantiated from urdf/extras_default.urdf.xacro with the same name
+  # (gps_0), mount (sensor_arch_mount, xyz 0.0 0.15 0.0) and gz topic.
+  # This entry exists only so the generator emits the gz->ROS bridge, which
+  # it gates on launch_enabled alone (clearpath_generator_gz/launch/
+  # generator.py:206) - so the bridge starts with the robot instead of being
+  # run by hand, while the sensor stays at 2 Hz.
+  gps:
+    - model: garmin_18x
+      urdf_enabled: false
+      launch_enabled: true
+      parent: sensor_arch_mount
+      xyz: [0.0, 0.15, 0.0]
+      rpy: [0.0, 0.0, 0.0]
   lidar2d:
     - model: hokuyo_ust          # gpu_lidar
       urdf_enabled: true
