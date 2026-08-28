@@ -112,6 +112,8 @@ def generate_launch_description():
     gz_sim_resource_path = SetEnvironmentVariable(
         name='GZ_SIM_RESOURCE_PATH',
         value=[
+            '/home/thinhpham/Documents/Husky_viz/worlds' + ':',
+            '/home/thinhpham/Documents/Husky_viz/models' + ':',
             os.path.join(pkg_clearpath_gz, 'worlds') + ':',
             os.path.join(pkg_clearpath_gz, 'meshes') + ':',
             ':' + ':'.join(packages_paths)])
