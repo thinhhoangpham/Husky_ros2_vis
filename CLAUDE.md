@@ -68,21 +68,33 @@ no `~/clearpath_ws` and nothing to rebuild after upgrades.
 are maintained for demos — follow them verbatim rather than improvising, and if
 a step fails, fix the file rather than working around it.**
 
-| File | Covers | Skill |
-|---|---|---|
-| `CLEAN_SIM.md` | kill survivors, clear `/dev/shm`, verify clean | `husky-sim-restart` |
-| `RUN_SIM.md` | launch, verify topics, verify the robot landed | `husky-run-sim` |
-| `NAV_PARK.md` | launch nav2 + GPS localization in park, send a goal, verify arrival and local avoidance | — |
-| `DEMO.md` | demo scenarios, one self-contained block each | — |
+| File | Covers |
+|---|---|
+| `CLEAN_SIM.md` | kill survivors, clear `/dev/shm`, verify clean |
+| `RUN_SIM.md` | set the robot config, launch the world and robot |
+| `NAV_PARK.md` | launch nav2 + GPS localization in park, send a goal, verify arrival and local avoidance |
+| `DEMO.md` | demo scenarios, one self-contained block each |
+
+All four are covered by the single `husky-sim` skill
+(`.claude/skills/husky-sim/`). The former `husky-sim-restart` and
+`husky-run-sim` skills were removed on 2026-08-27 — do not reference them.
 
 `CLEAN_SIM.md` runs first and must report `opt/ros : 0` / `shm : 0` before
 `RUN_SIM.md` Step 3. This section covers the surrounding context; the runbooks
 cover the doing.
 
+**`RUN_SIM.md` was reduced on 2026-08-27 to Steps 1-3 — robot config and
+launch only.** The verification gates it used to carry (topics, controller
+state, robot landed, renderer) and the whole autonomous-navigation section are
+gone. Nothing replaced them, so a launch is no longer gated by anything: after
+Step 3 confirm what the task actually needs, and confirm it with
+`ros2 topic info -v` on specific topics rather than a topic listing
+(gotcha #38).
+
 **Never run sim commands from the main conversation. Route every sim
 operation — start, stop, restart, verify, demo — to the `sim-operator` agent**
-(`.claude/agents/sim-operator.md`). It loads both skills, reads the runbooks
-itself, and returns a compact per-gate report. Give it the goal ("start lake"),
+(`.claude/agents/sim-operator.md`). It loads the `husky-sim` skill, reads the
+runbooks itself, and returns a compact per-gate report. Give it the goal ("start lake"),
 not the commands; check its report; if something is wrong, tell it to fix and
 re-run. Demo commands come from the project's docs, never from the caller.
 
@@ -142,14 +154,27 @@ Wheel odometry needs no sensor entry — the diff-drive controller publishes
 `platform/odom`, and the generated `robot_localization` EKF fuses it with the IMU
 into `platform/odom/filtered`.
 
-**GPS is fully built-in — unlike the compass, nothing had to be written.**
+**GPS needs a custom xacro for its rate, but is bridged by Clearpath.**
 `garmin_18x` (model `navsat`) ships with a `<gazebo>` block in
-`clearpath_sensors_description`, the stock worlds already load the `NavSat`
-system plugin and define `<spherical_coordinates>`, and Clearpath's generator
-auto-bridges it. Adding GPS is purely a `robot_configs/` edit — no custom
-xacro, no world patch, no manual `ros_gz_bridge` line. It is mounted on
-`sensor_arch_mount` with `xyz: [0.0, 0.15, 0.0]` to sit high and clear of the
-3D lidar.
+`clearpath_sensors_description`, and the stock worlds already load the `NavSat`
+system plugin and define `<spherical_coordinates>`. But its macro takes
+`params="name parent_link *origin"` only and hardcodes
+`<update_rate>1</update_rate>` with no override, so the 2 Hz sensor is a custom
+xacro: `urdf/gps_2hz.urdf.xacro`, instantiated from
+`urdf/extras_default.urdf.xacro`.
+
+The bridge, however, is Clearpath's. `robot_default.yaml` declares `gps_0` as
+`garmin_18x` with **`urdf_enabled: false`** and `launch_enabled: true`: the
+generator gates bridge creation on `launch_enabled` alone
+(`clearpath_generator_gz/launch/generator.py:206`) and never consults
+`urdf_enabled`, so it emits `~/clearpath/sensors/launch/gps_0.launch.py` and
+its bridge config while instantiating no link of its own. The custom xacro
+supplies the sensor at 2 Hz on the same name, mount and gz topic, and the
+generated bridge picks it up — verified 2026-08-27, exactly one `gps_0` in
+SDF and `Publisher count: 1` on `/a200_0000/sensors/gps_0/fix` after a plain
+`ros2 launch`. **This is the way to auto-bridge any custom sensor** (cf.
+gotcha #7). It is mounted on `sensor_arch_mount` with `xyz: [0.0, 0.15, 0.0]`
+to sit high and clear of the 3D lidar.
 
 Verified against the warehouse world: `latitude -22.98668564552283`,
 `longitude -43.20250099999985` — exactly the world's `<spherical_coordinates>`
@@ -292,13 +317,34 @@ real local field for the world's lat/lon), so heading works; divide by `1e4`
 before trusting `|B|`. Verified: 0.24 T with spherical coords, correct
 4.849e-05 T without.
 
-**6. `simulation.launch.py` hard-restricts `world` to six names.** Custom worlds
-need `launch/sim_compass.launch.py`, which accepts an absolute path (minus the
-`.sdf`, which the launch appends).
+**6. `simulation.launch.py` hard-restricts `world` to six names**, and its
+`gz_sim.launch.py` rebuilds `GZ_SIM_RESOURCE_PATH` from scratch, discarding
+whatever you exported. Both must be worked around to load a custom world, so
+`launch/park_sim.launch.py` and `launch/gz_sim.launch.py` are copies of the
+stock files carrying the minimum deviation:
 
-**7. Custom sensors are never auto-bridged.** Clearpath's generator only bridges
-models it knows. Compass and radio ride on the explicit `ros_gz_bridge` call in
-`scripts/run_husky_sim.sh`; anything custom added later needs a line there too.
+| File | Deviation from stock |
+|---|---|
+| `park_sim.launch.py` | `park` and `lake` added to the `world` choices list |
+| `park_sim.launch.py` | `gz_sim_launch` points at the local `gz_sim.launch.py` |
+| `park_sim.launch.py` | `robot_spawn` wrapped in an `OpaqueFunction` applying per-world spawn poses (gotcha #23) |
+| `gz_sim.launch.py` | `Husky_viz/worlds` and `Husky_viz/models` prepended to `GZ_SIM_RESOURCE_PATH` |
+
+`gz_args` is built as `<world>.sdf` — a bare name resolved through that
+resource path — which is why `worlds/` has to be on it too, not just
+`models/`. Launch with
+`ros2 launch launch/park_sim.launch.py world:=<park|lake|warehouse|...>`.
+
+**7. Custom sensors are never auto-bridged — unless you declare a stock model
+with `urdf_enabled: false`.** Clearpath's generator only bridges sensors
+declared in `robot.yaml`, but it gates the bridge on `launch_enabled` alone
+and never looks at `urdf_enabled`
+(`clearpath_generator_gz/launch/generator.py:206`). So declaring the nearest
+stock model with `urdf_enabled: false` / `launch_enabled: true` yields a
+generated bridge with no duplicate link, while a custom xacro supplies the
+real sensor. GPS uses this (see the GPS section). Compass and radio still ride
+on the explicit `ros_gz_bridge` call in `scripts/run_husky_sim.sh`, and could
+be converted the same way.
 
 **8. Killing a `ros2` CLI command with `timeout` trips Ubuntu's apport dialog**
 ("ros2 has stopped unexpectedly"). Cosmetic — the CLI does not unwind on SIGTERM.
@@ -385,7 +431,9 @@ a direct one-shot command instead (see Workflow section) before trusting a
 Gazebo `<topic>` says `.../sensors/gps_0/navsat`, but Clearpath's generated
 bridge remaps it to `/a200_0000/sensors/gps_0/fix` (`sensor_msgs/NavSatFix`).
 Grepping `ros2 topic list` for "navsat" finds nothing and looks like a broken
-sensor — search for `gps` instead.
+sensor — search for `gps` instead. That remap is generated only because
+`robot_default.yaml` declares `gps_0`; before 2026-08-27 it did not, and the
+remap came from the manual bridge line in `scripts/run_husky_sim.sh` instead.
 
 **16. In a Gazebo Classic world the `<state world_name='...'>` block holds the
 authoritative poses — the per-model `<pose>` values are stale authoring
@@ -427,7 +475,7 @@ so it cannot detect what it does not kill — it printed `clean: no sim processe
 remain` with 73 alive. The list has been incomplete twice (Clearpath's teleop
 stack `marker_server`/`joy_linux`/`teleop_twist_joy`, then
 `ros_gz_image/image_bridge`). Sweep on the `a200_0000` namespace and verify with
-a broader, independent check. See the `husky-sim-restart` skill.
+a broader, independent check. See the `husky-sim` skill.
 
 **22. Launch with `setsid nohup ... &` then `disown`.** A plain `nohup ... &`
 stays in the caller's process group, so interrupting the invoking command sends
@@ -438,8 +486,17 @@ SIGINT to Gazebo; it exits cleanly mid-load and reads as a crash or hang
 to `z=0.15`; park's ground is at z≈2.99 and lake's spans 3.5–5.9, so the default
 spawns the robot *under* the terrain and it falls forever (observed z=-12116).
 Authored poses live in the original ROS 1 launch files
-(`natural_enviroment/launch/add_husky_<world>_1.launch`), wired per-world in
-`scripts/run_husky_sim.sh` with `SPAWN_X/Y/Z/YAW` overrides.
+(`natural_enviroment/launch/add_husky_<world>_1.launch`) and are applied
+automatically: `WORLD_SPAWN_POSES` in `launch/park_sim.launch.py` holds them,
+and an `OpaqueFunction` substitutes a world's value for any pose element the
+caller left at its declared default (`x/y/yaw` `0.0`, `z` `0.3`). Explicit
+arguments still win — but a value that *equals* the stock default cannot be
+told apart from an unset one and will be replaced. `scripts/run_husky_sim.sh`
+also has `SPAWN_X/Y/Z/YAW` overrides.
+
+Verified 2026-08-27 with no pose arguments passed: `world:=park` settled at
+`[45.640, 0.021, 3.120]` yaw 2.6132, roll/pitch ~0.002 rad; `world:=lake`
+settled at `[-47.001, -14.981, 3.886]`, roll -0.067 rad on the slope.
 
 **24. ROS 2 Clearpath replaces wheel friction with a `WheelSlip` plugin, and it
 overwrites whatever `<mu>` the terrain or wheels declare, every timestep.** So
@@ -481,15 +538,30 @@ teleport-based check outside warehouse.
 
 **27. The controller spawner race can fail outright, not just be slow, and
 at either controller.** Activation was measured at **4.59 s** against a hard
-**5.00 s** switch timeout, so it fails roughly half the time and presents as
-a robot that will not move with every `RUN_SIM.md` gate green. Observed
+**5.00 s** switch timeout, so it fails often and presents as a robot that will
+not move with every `RUN_SIM.md` gate green.
+
+Quantified 2026-08-27 across every run in `~/.ros/log` (correlating each
+`gz sim server_*.log` with the launch dir naming the world):
+
+| World | Runs | Clean | Timeout, recovered | Timeout, no controllers |
+|---|---|---|---|---|
+| `warehouse_ext` | 2 | 2 | 0 | 0 |
+| `lake` | 9 | 8 | 1 | 0 |
+| `park` | 43 | 25 | 7 | **11** |
+
+So park fails **18 of 43 runs (42%)**, and **11 of 43 end with no controllers
+active at all**. It is *not* deterministic — a clean park start is a coin flip
+you won, not evidence the problem is gone. Observed
 twice on 2026-08-26: once losing at `platform_velocity_controller`, once at
 `joint_state_broadcaster` before it ever reached the second controller.
-`RUN_SIM.md` Step 4 originally only checked `imu_0/data`, which is published
+`RUN_SIM.md` Step 4 (removed 2026-08-27) originally only checked `imu_0/data`, which is published
 straight from the Gazebo sensor and is structurally blind to a dead
 controller spawner — a sim has passed every gate while
 `platform_velocity_controller` was absent and `/a200_0000/platform/odom` had
-zero publishers. Step 4 now also requires:
+zero publishers. That gate was removed with the rest of Step 4 on
+2026-08-27; when a task needs to know the controllers are alive, run it
+yourself:
 ```bash
 ros2 service call /a200_0000/controller_manager/list_controllers controller_manager_msgs/srv/ListControllers "{}"
 ```
@@ -497,9 +569,21 @@ with both `joint_state_broadcaster` and `platform_velocity_controller` state
 `active` (the `ros2 control` CLI is **not installed** on this machine, so the
 service call is the working form), plus
 `ros2 topic info -v /a200_0000/platform/odom` requiring `Publisher count: 1`.
-If that gate fails, `RUN_SIM.md`'s recovery step (re-running the spawner
-manually for both controllers with `--switch-timeout 30`) is **UNTESTED** —
-the failure has never been reproduced on demand.
+If that fails, the recovery is to re-run the spawner manually for both
+controllers with `--switch-timeout 30`:
+
+```bash
+ros2 run controller_manager spawner \
+  joint_state_broadcaster platform_velocity_controller \
+  --controller-manager /a200_0000/controller_manager \
+  --switch-timeout 30
+```
+
+This works — the run-history table above shows 8 runs (7 park, 1 lake) that
+timed out and then reached `Successfully switched controllers`. It succeeds
+because the switch completes as soon as the world finishes loading and the
+update loop runs; the 30 s budget simply spans the stall that the stock 5 s
+does not (gotcha #37).
 
 **28. The prior park map deliberately omits the 15 `arbol4` small trees**
 (3.10 m across, 4.11 m tall) so they have to be avoided from live lidar
@@ -680,3 +764,29 @@ it does not change what the underlying work is.
 
 Gazebo downloads ~23 MB of Fuel assets for the warehouse world on first launch
 (cached in `~/.gz/fuel`). Subsequent starts are fast.
+
+**37. `--switch-timeout` is the upstream fix for #27, and Clearpath omits
+it.** ros2_control documents the flag as *"Time to wait for a successful state
+switch of controllers. Useful when switching cannot be performed immediately,
+e.g., paused simulations at startup"* — it exists for exactly this. The switch
+is executed by `controller_manager`'s update loop, which `gz_ros_control` runs
+from Gazebo's `PreUpdate`, so while a heavy world is loading its assets the
+request simply sits unserviced. `clearpath_control/launch/control.launch.py:108`
+passes `--controller-manager-timeout 60` but no `--switch-timeout`, leaving the
+`5.0` default; that is fine for warehouse, which starts stepping almost at
+once, and wrong for park. There is **no environment override** — `spawner.py`
+uses `os.getenv` only for `ROS_HOME`, so the value can only arrive as a command
+line argument. Reaching that line means forking `control.launch.py`,
+`platform.launch.py`, `robot_spawn.launch.py` *and* standing in for the
+generated `platform-service.launch.py` (~663 lines, one of them regenerated per
+config), which is why the manual recovery spawner is still the remedy.
+
+**38. `ros2 topic list` silently under-reports after `ros2 daemon stop`.**
+`CLEAN_SIM.md` Step 2 stops the daemon, so the next `ros2` call rebuilds
+discovery from scratch and can return a list missing topics that are live and
+publishing. Observed 2026-08-27 on a healthy warehouse sim: `ros2 topic list`
+showed **no** `sensors/*` topics at all, `--no-daemon` showed one, while
+`ros2 topic info -v` reported `Publisher count: 1` on every one of them. Same
+family as gotcha #14. **Never conclude a sensor is missing from a topic
+listing** — confirm with `ros2 topic info -v <topic>` on the specific topic,
+which is the only form that proved reliable.
