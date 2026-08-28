@@ -100,8 +100,15 @@ fi
 echo "==> applying robot config: $SIM_CONFIG"
 /home/thinhpham/Documents/Husky_viz/scripts/apply_config.sh "$SIM_CONFIG" > /dev/null
 
+# world:= must be a BARE world name, never a path. park_sim.launch.py keeps
+# clearpath_gz's `choices` restriction on the argument (it only adds park and
+# lake to the list), so an absolute .sdf path is rejected outright and the
+# launch aborts before Gazebo starts. The bare name resolves through
+# GZ_SIM_RESOURCE_PATH (CLAUDE.md gotcha #6), and it is also the key
+# WORLD_SPAWN_POSES is looked up under, so a path form would silently lose the
+# authored spawn poses too (gotcha #23).
 ros2 launch /home/thinhpham/Documents/Husky_viz/launch/park_sim.launch.py \
-  world:="/home/thinhpham/Documents/Husky_viz/worlds/$WORLD" \
+  world:="$WORLD" \
   "${POSE_ARGS[@]}" &
 LAUNCH_PID=$!
 
@@ -113,6 +120,19 @@ LAUNCH_PID=$!
 # topic /a200_0000/sensors/gps_0/fix (CLAUDE.md gotcha #15).
 #   [ = gz->ROS,  ] = ROS->gz
 sleep 12
+
+# Do not bridge over a dead simulator. parameter_bridge advertises its topics
+# whether or not anything is behind them, so if the launch has already died the
+# bridge still makes `ros2 topic info -v` report `Publisher count: 1` on
+# /husky/rx and friends - a failed launch then reads as a working sim, which
+# defeats the project's standard verification idiom.
+if ! kill -0 "$LAUNCH_PID" 2>/dev/null; then
+  echo "ERROR: ros2 launch (pid $LAUNCH_PID) is no longer running - the sim" >&2
+  echo "       failed to start, so the gz bridge is NOT being started." >&2
+  echo "       Check the launch output above for the reason." >&2
+  exit 1
+fi
+
 ros2 run ros_gz_bridge parameter_bridge \
   "/a200_0000/sensors/compass_0/mag@sensor_msgs/msg/MagneticField[gz.msgs.Magnetometer" \
   "/a200_0000/sensors/imu_enu/data@sensor_msgs/msg/Imu[gz.msgs.IMU" \
