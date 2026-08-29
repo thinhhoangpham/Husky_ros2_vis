@@ -13,6 +13,7 @@ effects so gates are unit-testable without a simulator.
 from __future__ import annotations
 
 import argparse
+import re
 import sys
 from dataclasses import dataclass
 from pathlib import Path
@@ -27,6 +28,45 @@ NAV_LOG = "/tmp/nav.log"
 ROS_SETUP = "source /opt/ros/jazzy/setup.bash"
 
 PHASE_NAMES = ["clean", "config", "launch", "controllers", "robot", "extras", "nav2"]
+
+# ---- pure gates
+
+EXTRA_SWEEP = ["a200_0000", "gz sim", "gz_tools_vendor"]
+
+
+def parse_kill_patterns(kill_sim_text: str) -> list[str]:
+    m = re.search(r"PATTERNS=\((.*?)\)", kill_sim_text, re.S)
+    if not m:
+        raise ValueError("no PATTERNS=( ... ) array in kill_sim.sh")
+    out = []
+    for line in m.group(1).splitlines():
+        line = line.strip()
+        if not line or line.startswith("#"):
+            continue
+        q = re.match(r'"([^"]+)"', line)
+        if q:
+            out.append(q.group(1))
+    return out
+
+
+def find_sim_pids(ps_lines: str, patterns: list[str], self_pid: int,
+                  self_path: str) -> list[tuple[int, str]]:
+    found = []
+    for line in ps_lines.splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        pid_s, _, cmd = line.partition(" ")
+        pid = int(pid_s)
+        if pid == self_pid or "bash -c" in cmd or self_path in cmd:
+            continue
+        if any(p in cmd for p in patterns):
+            found.append((pid, cmd))
+    return found
+
+
+def shm_count(ls_dev_shm: str) -> int:
+    return sum(1 for n in ls_dev_shm.split() if "fastrtps" in n)
 
 
 @dataclass
