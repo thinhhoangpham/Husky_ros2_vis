@@ -29,8 +29,8 @@ Expected shape (park):
 [0 clean      ] ok   killed 0, shm 0
 [1 config     ] ok   default  (sensors: gps_0 imu_0 lidar2d_0 lidar3d_0)
 [2 launch     ] ok   pid 41233, park stepping after 6.8 s
-[3 controllers] ok   clean            <- or: recovered (...)
-[4 robot      ] ok   pose 45.64 0.02 3.12  odom 33 Hz imu 67 Hz scan 24 Hz points 13 Hz
+[3 controllers] ok   clean            <- or: recovered  (...)
+[4 robot      ] ok   pose 45.64 0.02 3.12  4/4 topics receiving
 [5 extras     ] skip default config has no compass/radio
 [6 nav2       ] ok   map->odom present, all lifecycle nodes active
 READY park default nav

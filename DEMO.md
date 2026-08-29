@@ -3,8 +3,8 @@
 Steps only. Each demo is self-contained and runs verbatim, top to bottom.
 Background and rationale live in `CLAUDE.md`.
 
-Prerequisites for every demo: `CLEAN_SIM.md` has reported clean, and
-`RUN_SIM.md` has completed through Step 5.
+Prerequisites for every demo: `python3 scripts/sim.py start <world>` has
+printed `READY` (`CLEAN_SIM.md` and `RUN_SIM.md` are both that one command now).
 
 ---
 
