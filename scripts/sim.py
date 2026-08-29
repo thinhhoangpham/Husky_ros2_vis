@@ -32,7 +32,7 @@ ROBOT_MODEL = "a200_0000/robot"
 STATE_FILE = Path.home() / ".husky_sim" / "state.json"
 SIM_LOG = "/tmp/sim.log"
 NAV_LOG = "/tmp/nav.log"
-NAV_DEADLINE = 60.0
+NAV_DEADLINE = 180.0
 ROS_SETUP = "source /opt/ros/jazzy/setup.bash"
 
 PHASE_NAMES = ["clean", "config", "launch", "controllers", "robot", "extras", "nav2"]
@@ -622,8 +622,29 @@ def cmd_status(shell, out=print) -> int:
     return rc
 
 
+def check_ros_env() -> str | None:
+    """Return an error message if ROS is not sourced in this process, else None.
+
+    Every phase eventually shells out to `ros2`/rclpy; without ROS sourced
+    the first such use dies with a bare ModuleNotFoundError traceback and no
+    verdict line, breaking this tool's "last line is the verdict" contract.
+    Detect it up front via importlib.util.find_spec, which only resolves the
+    module location and never imports rclpy - so the ROS-free unit suite
+    stays untouched.
+    """
+    import importlib.util
+    if importlib.util.find_spec("rclpy") is None:
+        return ("ROS 2 is not sourced in this shell - "
+                "run: source /opt/ros/jazzy/setup.bash")
+    return None
+
+
 def main(argv: list[str] | None = None) -> int:
     args = parse_args(sys.argv[1:] if argv is None else argv)
+    err = check_ros_env()
+    if err:
+        print(f"FAIL 0 env: {err}")
+        return 2
     shell = Shell()
     if args.cmd == "start":
         return cmd_start(shell, args)

@@ -112,11 +112,11 @@ def nav_ready(sh=sh, tf_check=check_transform) -> list[str]:
     # actually reflects whether the node is up.
     for n in LIFECYCLE:
         out = sh(f"ros2 service call {NS}/{n}/get_state lifecycle_msgs/srv/GetState "
-                 f"'{{}}' 2>/dev/null", timeout=5.0)
+                 f"'{{}}' 2>/dev/null", timeout=2.0)
         good = "label='active'" in out
         print(f"  {n:30s}: {'active' if good else 'NOT ACTIVE'}")
         if not good:
-            reason = out.strip()[:80] or "no response (service unavailable within 5s)"
+            reason = out.strip()[:80] or "no response (service unavailable within 2s)"
             failures.append(f"{n} is not active (get_state: {reason})")
     print("== action servers")
     acts = sh("ros2 action list 2>/dev/null")

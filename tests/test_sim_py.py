@@ -442,6 +442,19 @@ def test_phase_nav2_fails_reporting_last_failures():
     assert r.status == "fail" and "planner_server" in r.detail
 
 
+def test_phase_nav2_retries_across_several_slow_passes():
+    """Defect 1 regression: a fake whose nav_ready() reports failures for the
+    first several polls (as a get_state timeout would under load) and then
+    succeeds must still yield 'ok' - proving phase_nav2 retries within
+    NAV_DEADLINE rather than giving up after a single starved pass."""
+    sh = NavShell([["velocity_smoother is not active (get_state timeout)"]] * 5 + [[]])
+    r, pid = phase_nav2(sh, "park", False)
+    assert r.status == "ok" and pid == 900
+    # the fake clock only advances via shell.pause(interval) between polls,
+    # so reaching "ok" here proves multiple probe() calls actually ran.
+    assert sh.t > 0
+
+
 import json
 from scripts.sim import cmd_start, cmd_stop, cmd_status, save_state, load_state
 from scripts.sim import PHASE_NAMES
@@ -601,3 +614,28 @@ def test_cmd_status_is_read_only(monkeypatch, tmp_path):
     assert sh.launched == []
     assert sh.killed == []
     assert not any("spawner" in c for c in sh.calls)
+
+
+from scripts.sim import check_ros_env, main
+
+
+def test_check_ros_env_none_when_rclpy_importable(monkeypatch):
+    import importlib.util
+    monkeypatch.setattr(importlib.util, "find_spec", lambda name: object())
+    assert check_ros_env() is None
+
+
+def test_check_ros_env_message_when_rclpy_missing(monkeypatch):
+    import importlib.util
+    monkeypatch.setattr(importlib.util, "find_spec", lambda name: None)
+    err = check_ros_env()
+    assert err is not None and "source /opt/ros/jazzy/setup.bash" in err
+
+
+def test_main_exits_2_with_fail_line_when_ros_not_sourced(monkeypatch, capsys):
+    import scripts.sim as S
+    monkeypatch.setattr(S, "check_ros_env", lambda: "ROS 2 is not sourced in this shell - run: source /opt/ros/jazzy/setup.bash")
+    rc = main(["start", "park"])
+    out = capsys.readouterr().out
+    assert rc == 2
+    assert out.strip().startswith("FAIL 0 env:")
