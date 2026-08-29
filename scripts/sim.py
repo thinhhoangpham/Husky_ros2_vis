@@ -307,6 +307,44 @@ def phase_launch(shell, world: str, pose: str) -> tuple[PhaseResult, int]:
                        f"pid {pid}, {world} stepping after {shell.now() - t0:.1f} s"), pid
 
 
+CONTROLLERS = ["joint_state_broadcaster", "platform_velocity_controller"]
+CLEAN_WAIT = 10.0
+
+
+def controller_states(list_output: str) -> dict[str, str]:
+    return dict(re.findall(r"name='([^']+)', state='([^']+)'", list_output))
+
+
+def _query_controllers(shell) -> dict[str, str]:
+    out = shell.run(f"ros2 service call {NS}/controller_manager/list_controllers "
+                    f"controller_manager_msgs/srv/ListControllers '{{}}' 2>/dev/null", timeout=10)
+    return controller_states(out)
+
+
+def _describe(states: dict[str, str]) -> str:
+    return ", ".join(f"{c} {'was ' + states[c] if c in states else 'missing'}"
+                     for c in CONTROLLERS if states.get(c) != "active")
+
+
+def phase_controllers(shell) -> PhaseResult:
+    def all_active():
+        st = _query_controllers(shell)
+        return st if all(st.get(c) == "active" for c in CONTROLLERS) else None
+    st = poll(shell, CLEAN_WAIT, all_active)
+    if st:
+        return PhaseResult(3, "controllers", "ok", "clean")
+    before = _query_controllers(shell)
+    t0 = shell.now()
+    shell.run(f"ros2 run controller_manager spawner {' '.join(CONTROLLERS)} "
+              f"--controller-manager {NS}/controller_manager --switch-timeout 30", timeout=45)
+    after = _query_controllers(shell)
+    if all(after.get(c) == "active" for c in CONTROLLERS):
+        return PhaseResult(3, "controllers", "ok",
+                           f"recovered  ({_describe(before)}; respawned in {shell.now() - t0:.1f} s)")
+    return PhaseResult(3, "controllers", "fail",
+                       f"after spawner --switch-timeout 30: {_describe(after)} (CLAUDE.md #27)")
+
+
 # ----------------------------------------------------------------------- CLI
 def parse_args(argv: list[str]) -> argparse.Namespace:
     p = argparse.ArgumentParser(prog="sim.py")

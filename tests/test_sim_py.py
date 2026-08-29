@@ -249,3 +249,49 @@ def test_phase_launch_fails_when_sim_time_stalls():
     sh.t = 0.0
     r, _ = phase_launch(sh, "park", "")
     assert r.status == "fail" and "not stepping" in r.detail
+
+
+from scripts.sim import controller_states, phase_controllers, NS
+
+LIST_OK = ("response:\ncontroller_manager_msgs.srv.ListControllers_Response(controller=["
+           "ControllerState(name='joint_state_broadcaster', state='active', type='x'), "
+           "ControllerState(name='platform_velocity_controller', state='active', type='y')])\n")
+LIST_HALF = LIST_OK.replace("name='platform_velocity_controller', state='active'",
+                            "name='platform_velocity_controller', state='inactive'")
+LIST_NONE = "response:\ncontroller_manager_msgs.srv.ListControllers_Response(controller=[])\n"
+
+
+def test_controller_states_parses_name_state_pairs():
+    assert controller_states(LIST_HALF) == {"joint_state_broadcaster": "active",
+                                            "platform_velocity_controller": "inactive"}
+    assert controller_states(LIST_NONE) == {}
+
+
+def test_phase_controllers_clean():
+    sh = FakeShell(run_out={"list_controllers": LIST_OK})
+    r = phase_controllers(sh)
+    assert r.status == "ok" and r.detail.startswith("clean")
+    assert not any("spawner" in c for c in sh.calls)
+
+
+def test_phase_controllers_recovers_with_switch_timeout_30():
+    class Sh(FakeShell):
+        def run(self, cmd, timeout=30):
+            self.calls.append(cmd)
+            if "spawner" in cmd:
+                self.run_out["list_controllers"] = LIST_OK
+                return "Successfully switched controllers"
+            return self.run_out.get("list_controllers", LIST_NONE)
+    sh = Sh(run_out={"list_controllers": LIST_HALF})
+    r = phase_controllers(sh)
+    assert r.status == "ok" and r.detail.startswith("recovered")
+    assert "platform_velocity_controller was inactive" in r.detail
+    spawn = [c for c in sh.calls if "spawner" in c][0]
+    assert "--switch-timeout 30" in spawn and "joint_state_broadcaster platform_velocity_controller" in spawn
+    assert f"--controller-manager {NS}/controller_manager" in spawn
+
+
+def test_phase_controllers_fails_when_recovery_fails():
+    sh = FakeShell(run_out={"list_controllers": LIST_NONE, "spawner": "timed out"})
+    r = phase_controllers(sh)
+    assert r.status == "fail" and "joint_state_broadcaster missing" in r.detail
