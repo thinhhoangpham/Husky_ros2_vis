@@ -386,14 +386,23 @@ def test_phase_extras_bridges_for_full():
     assert "parameter_bridge" in sh.calls[-1] and "extras_gz_bridge" in sh.calls[-1]
 
 
-def test_shell_launch_truncates_log(tmp_path):
-    from scripts.sim import Shell
+def test_shell_launch_truncates_log(tmp_path, monkeypatch):
+    import os as _os
+    import time as _t
+    import scripts.sim as sim
+    monkeypatch.setattr(sim, "ROS_SETUP", ":")
     log = tmp_path / "log.txt"
     log.write_text("STALE MARKER FROM PREVIOUS RUN\n")
-    sh = Shell()
+    sh = sim.Shell()
     pid = sh.launch("true", str(log))
-    import time as _t
     end = _t.monotonic() + 5
-    while sh.pid_alive(pid) and _t.monotonic() < end:
-        _t.sleep(0.05)
+    alive = True
+    while alive and _t.monotonic() < end:
+        try:
+            reaped_pid, _ = _os.waitpid(pid, _os.WNOHANG)
+            alive = reaped_pid == 0  # 0 means still running; nonzero means reaped
+        except ChildProcessError:
+            alive = False
+        if alive:
+            _t.sleep(0.02)
     assert "STALE MARKER" not in log.read_text()
