@@ -328,7 +328,7 @@ class RobotShell(FakeShell):
 def test_phase_robot_ok():
     sh = RobotShell({"odom": 33.0, "imu": 67.0, "scan": 24.0, "points": 13.0}, GZ_MODEL)
     r = phase_robot(sh, "park", None)
-    assert r.status == "ok" and "pose 45.64 0.02 3.12" in r.detail and "odom 33" in r.detail
+    assert r.status == "ok" and "pose 45.64 0.02 3.12" in r.detail and "4/4 topics receiving" in r.detail
 
 
 def test_phase_robot_fails_on_silent_topic():
@@ -342,3 +342,9 @@ def test_phase_robot_fails_when_fallen_through_terrain():
                     GZ_MODEL.replace("3.120000", "-12116.000000"))
     r = phase_robot(sh, "park", None)
     assert r.status == "fail" and "#23" in r.detail
+
+
+def test_phase_robot_ok_detail_reports_counts_not_rates():
+    sh = RobotShell({"odom": 1, "imu": 40, "scan": 3, "points": 1}, GZ_MODEL)
+    r = phase_robot(sh, "park", None)
+    assert r.status == "ok" and "4/4 topics receiving" in r.detail and "Hz" not in r.detail

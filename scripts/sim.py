@@ -199,7 +199,14 @@ class Shell:
     def world_stats(self, world: str) -> str:
         return self.run(f"gz topic -e -t /world/{world}/stats -n 1", timeout=5)
 
-    def receive(self, topics: dict, deadline: float) -> dict[str, float]:
+    def receive(self, topics: dict, deadline: float) -> dict[str, int]:
+        """Deadline-bounded liveness check, NOT a rate measurement: subscribes
+        to each topic with sensor-data QoS and spins until every topic has
+        received at least one message or the deadline passes, returning the
+        per-topic message COUNT observed in that window. The window ends as
+        soon as the slowest topic arrives, so counts are not comparable
+        across topics and must never be reported as Hz. For actual rates use
+        the project's tools/check_*.py scripts."""
         import importlib
         import rclpy
         from rclpy.node import Node
@@ -216,10 +223,9 @@ class Shell:
         t0 = time.monotonic()
         while time.monotonic() - t0 < deadline and not all(counts.values()):
             rclpy.spin_once(node, timeout_sec=0.1)
-        elapsed = max(time.monotonic() - t0, 1e-3)
         node.destroy_node()
         rclpy.shutdown()
-        return {k: c / elapsed for k, c in counts.items()}
+        return counts
 
     def gz_pose(self) -> str:
         return self.run(f"gz model -m {ROBOT_MODEL} -p", timeout=10)
@@ -400,8 +406,8 @@ def spawn_z(world: str, override: float | None) -> float | None:
 
 
 def phase_robot(shell, world: str, z_override: float | None) -> PhaseResult:
-    rates = shell.receive(ROBOT_TOPICS, ROBOT_DEADLINE)
-    silent = [k for k, hz in rates.items() if hz <= 0.0]
+    counts = shell.receive(ROBOT_TOPICS, ROBOT_DEADLINE)
+    silent = [k for k, c in counts.items() if c <= 0]
     if silent:
         return PhaseResult(4, "robot", "fail",
                            f"no messages within {ROBOT_DEADLINE:.0f} s on: {' '.join(silent)}")
@@ -412,8 +418,10 @@ def phase_robot(shell, world: str, z_override: float | None) -> PhaseResult:
     if abs(pose[2] - zs) > LANDED_TOL:
         return PhaseResult(4, "robot", "fail",
                            f"z={pose[2]:.2f} vs spawn z={zs:.2f}: fell through terrain? (CLAUDE.md #23)")
-    hz = " ".join(f"{k} {rates[k]:.0f} Hz" for k in ROBOT_TOPICS)
-    return PhaseResult(4, "robot", "ok", f"pose {pose[0]:.2f} {pose[1]:.2f} {pose[2]:.2f}  {hz}")
+    received = sum(1 for c in counts.values() if c > 0)
+    return PhaseResult(4, "robot", "ok",
+                       f"pose {pose[0]:.2f} {pose[1]:.2f} {pose[2]:.2f}  "
+                       f"{received}/{len(ROBOT_TOPICS)} topics receiving")
 
 
 # ----------------------------------------------------------------------- CLI
