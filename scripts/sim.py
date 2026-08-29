@@ -199,6 +199,31 @@ class Shell:
     def world_stats(self, world: str) -> str:
         return self.run(f"gz topic -e -t /world/{world}/stats -n 1", timeout=5)
 
+    def receive(self, topics: dict, deadline: float) -> dict[str, float]:
+        import importlib
+        import rclpy
+        from rclpy.node import Node
+        from rclpy.qos import qos_profile_sensor_data
+        rclpy.init()
+        node = Node("sim_py_receive")
+        counts = {k: 0 for k in topics}
+        for k, (topic, typ) in topics.items():
+            pkg, _, cls = typ.split("/")
+            msg_cls = getattr(importlib.import_module(f"{pkg}.msg"), cls)
+            node.create_subscription(msg_cls, topic,
+                                     lambda _m, k=k: counts.__setitem__(k, counts[k] + 1),
+                                     qos_profile_sensor_data)
+        t0 = time.monotonic()
+        while time.monotonic() - t0 < deadline and not all(counts.values()):
+            rclpy.spin_once(node, timeout_sec=0.1)
+        elapsed = max(time.monotonic() - t0, 1e-3)
+        node.destroy_node()
+        rclpy.shutdown()
+        return {k: c / elapsed for k, c in counts.items()}
+
+    def gz_pose(self) -> str:
+        return self.run(f"gz model -m {ROBOT_MODEL} -p", timeout=10)
+
 
 def poll(shell, deadline_s: float, probe, interval: float = 0.5):
     """Call `probe()` until it returns truthy or the deadline passes.
@@ -343,6 +368,52 @@ def phase_controllers(shell) -> PhaseResult:
                            f"recovered  ({_describe(before)}; respawned in {shell.now() - t0:.1f} s)")
     return PhaseResult(3, "controllers", "fail",
                        f"after spawner --switch-timeout 30: {_describe(after)} (CLAUDE.md #27)")
+
+
+ROBOT_TOPICS = {
+    "odom":   (f"{NS}/platform/odom",            "nav_msgs/msg/Odometry"),
+    "imu":    (f"{NS}/sensors/imu_0/data",       "sensor_msgs/msg/Imu"),
+    "scan":   (f"{NS}/sensors/lidar2d_0/scan",   "sensor_msgs/msg/LaserScan"),
+    "points": (f"{NS}/sensors/lidar3d_0/points", "sensor_msgs/msg/PointCloud2"),
+}
+ROBOT_DEADLINE = 10.0
+LANDED_TOL = 0.5
+
+
+def parse_gz_pose(gz_model_output: str) -> tuple[float, float, float] | None:
+    m = re.search(r"Pose[^\n]*\n\s*\[([^\]]+)\]", gz_model_output)
+    if not m:
+        return None
+    try:
+        v = tuple(float(x) for x in m.group(1).split())
+    except ValueError:
+        return None
+    return v if len(v) == 3 else None
+
+
+def spawn_z(world: str, override: float | None) -> float | None:
+    if override is not None:
+        return float(override)
+    text = Path(f"{REPO}/launch/park_sim.launch.py").read_text()
+    m = re.search(r"'%s': \{[^}]*'z': '([\d.\-]+)'" % re.escape(world), text)
+    return float(m.group(1)) if m else 0.3
+
+
+def phase_robot(shell, world: str, z_override: float | None) -> PhaseResult:
+    rates = shell.receive(ROBOT_TOPICS, ROBOT_DEADLINE)
+    silent = [k for k, hz in rates.items() if hz <= 0.0]
+    if silent:
+        return PhaseResult(4, "robot", "fail",
+                           f"no messages within {ROBOT_DEADLINE:.0f} s on: {' '.join(silent)}")
+    pose = parse_gz_pose(shell.gz_pose())
+    if pose is None:
+        return PhaseResult(4, "robot", "fail", f"gz model returned no pose for {ROBOT_MODEL}")
+    zs = spawn_z(world, z_override)
+    if abs(pose[2] - zs) > LANDED_TOL:
+        return PhaseResult(4, "robot", "fail",
+                           f"z={pose[2]:.2f} vs spawn z={zs:.2f}: fell through terrain? (CLAUDE.md #23)")
+    hz = " ".join(f"{k} {rates[k]:.0f} Hz" for k in ROBOT_TOPICS)
+    return PhaseResult(4, "robot", "ok", f"pose {pose[0]:.2f} {pose[1]:.2f} {pose[2]:.2f}  {hz}")
 
 
 # ----------------------------------------------------------------------- CLI

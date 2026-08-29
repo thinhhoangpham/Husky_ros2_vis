@@ -295,3 +295,50 @@ def test_phase_controllers_fails_when_recovery_fails():
     sh = FakeShell(run_out={"list_controllers": LIST_NONE, "spawner": "timed out"})
     r = phase_controllers(sh)
     assert r.status == "fail" and "joint_state_broadcaster missing" in r.detail
+
+
+from scripts.sim import parse_gz_pose, spawn_z, phase_robot
+
+GZ_MODEL = """Requesting state for world [park]...
+Model: [a200_0000/robot]
+  - Pose [ XYZ (m) ] [ RPY (rad) ]:
+    [45.640000 0.021000 3.120000]
+    [0.002000 0.001000 2.613200]
+"""
+
+
+def test_parse_gz_pose():
+    assert parse_gz_pose(GZ_MODEL) == (45.64, 0.021, 3.12)
+    assert parse_gz_pose("no model") is None
+
+
+def test_spawn_z_from_world_table_and_override():
+    assert spawn_z("park", None) == 3.3
+    assert spawn_z("warehouse", None) == 0.3
+    assert spawn_z("park", 9.0) == 9.0
+
+
+class RobotShell(FakeShell):
+    def __init__(self, rates, pose_out):
+        super().__init__(); self.rates = rates; self.pose_out = pose_out
+    def receive(self, topics, deadline): return {k: self.rates.get(k, 0.0) for k in topics}
+    def gz_pose(self): return self.pose_out
+
+
+def test_phase_robot_ok():
+    sh = RobotShell({"odom": 33.0, "imu": 67.0, "scan": 24.0, "points": 13.0}, GZ_MODEL)
+    r = phase_robot(sh, "park", None)
+    assert r.status == "ok" and "pose 45.64 0.02 3.12" in r.detail and "odom 33" in r.detail
+
+
+def test_phase_robot_fails_on_silent_topic():
+    sh = RobotShell({"odom": 0.0, "imu": 67.0, "scan": 24.0, "points": 13.0}, GZ_MODEL)
+    r = phase_robot(sh, "park", None)
+    assert r.status == "fail" and "odom" in r.detail
+
+
+def test_phase_robot_fails_when_fallen_through_terrain():
+    sh = RobotShell({"odom": 33.0, "imu": 67.0, "scan": 24.0, "points": 13.0},
+                    GZ_MODEL.replace("3.120000", "-12116.000000"))
+    r = phase_robot(sh, "park", None)
+    assert r.status == "fail" and "#23" in r.detail
