@@ -656,3 +656,98 @@ def test_main_exits_2_with_fail_line_when_ros_not_sourced(monkeypatch, capsys):
     out = capsys.readouterr().out
     assert rc == 2
     assert out.strip().startswith("FAIL 0 env:")
+
+
+from tools.check_nav2_ready import _lifecycle_states_from_clients
+
+
+class _FakeFuture:
+    def __init__(self, result):
+        self._result = result
+
+    def result(self):
+        return self._result
+
+
+class _FakeState:
+    def __init__(self, label):
+        self.label = label
+
+
+class _FakeGetStateResult:
+    def __init__(self, label):
+        self.current_state = _FakeState(label)
+
+
+class _FakeClient:
+    """Stand-in for an rclpy Client: no ROS import required."""
+
+    def __init__(self, service_available, response_label=None):
+        self._service_available = service_available
+        self._response_label = response_label
+        self.wait_for_service_calls = []
+        self.call_async_calls = 0
+
+    def wait_for_service(self, timeout_sec):
+        self.wait_for_service_calls.append(timeout_sec)
+        return self._service_available
+
+    def call_async(self, request):
+        self.call_async_calls += 1
+        result = _FakeGetStateResult(self._response_label) if self._response_label else None
+        return _FakeFuture(result)
+
+
+def _noop_spin(future, timeout_sec):
+    pass
+
+
+def test_lifecycle_states_labels_unavailable_when_wait_for_service_fails():
+    """Defect C regression: a service never discovered must be labelled
+    "unavailable", exactly as an unresponsive call_async was labelled before
+    this fix, so failure text and printed lines keep the same shape."""
+    client = _FakeClient(service_available=False)
+    clients = {"map_server": client}
+    states = _lifecycle_states_from_clients(
+        ["map_server"], clients, spin_until_future_complete=_noop_spin,
+        make_request=object, first_service_timeout=10.0, per_service_timeout=3.0)
+    assert states == {"map_server": "unavailable"}
+    assert client.call_async_calls == 0
+
+
+def test_lifecycle_states_calls_client_once_available_and_returns_state():
+    """A client that becomes available (wait_for_service True) must actually
+    be called, and its reported state returned verbatim."""
+    client = _FakeClient(service_available=True, response_label="active")
+    clients = {"map_server": client}
+    states = _lifecycle_states_from_clients(
+        ["map_server"], clients, spin_until_future_complete=_noop_spin,
+        make_request=object, first_service_timeout=10.0, per_service_timeout=3.0)
+    assert states == {"map_server": "active"}
+    assert client.call_async_calls == 1
+
+
+def test_lifecycle_states_first_node_gets_the_generous_discovery_budget():
+    """The first service pays the DDS discovery cost for the whole node;
+    later services reuse that discovered graph and get the short budget."""
+    c1 = _FakeClient(service_available=True, response_label="active")
+    c2 = _FakeClient(service_available=True, response_label="active")
+    clients = {"map_server": c1, "filter_mask_server": c2}
+    _lifecycle_states_from_clients(
+        ["map_server", "filter_mask_server"], clients,
+        spin_until_future_complete=_noop_spin, make_request=object,
+        first_service_timeout=10.0, per_service_timeout=3.0)
+    assert c1.wait_for_service_calls == [10.0]
+    assert c2.wait_for_service_calls == [3.0]
+
+
+def test_lifecycle_states_unresponsive_call_async_still_labelled_unavailable():
+    """Service is discovered (wait_for_service True) but the GetState call
+    itself never completes - future.result() is None - must still read
+    "unavailable", matching the pre-fix label for this case."""
+    client = _FakeClient(service_available=True, response_label=None)
+    clients = {"map_server": client}
+    states = _lifecycle_states_from_clients(
+        ["map_server"], clients, spin_until_future_complete=_noop_spin,
+        make_request=object, first_service_timeout=10.0, per_service_timeout=3.0)
+    assert states == {"map_server": "unavailable"}

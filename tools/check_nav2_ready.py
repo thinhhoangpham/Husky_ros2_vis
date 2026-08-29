@@ -97,24 +97,68 @@ def check_transform() -> bool:
     return found
 
 
+def _lifecycle_states_from_clients(nodes: list[str], clients: dict,
+                                    spin_until_future_complete,
+                                    make_request,
+                                    first_service_timeout: float,
+                                    per_service_timeout: float) -> dict[str, str]:
+    """Pure core of get_lifecycle_states, decoupled from rclpy/lifecycle_msgs
+    so it can be unit tested without ROS. `clients` maps node name -> an
+    object exposing `.wait_for_service(timeout_sec)` and `.call_async(req)`
+    (a real rclpy Client, or a fake with the same shape in tests).
+    `spin_until_future_complete(future, timeout_sec)` drives the future to
+    completion; `make_request()` builds a fresh GetState.Request (or fake).
+
+    Root cause of the false-negative this replaces: get_lifecycle_states
+    used to call client.call_async(...) with no preceding wait_for_service.
+    A brand-new rclpy participant has not finished DDS discovery of these
+    services yet, so the request went out before the service existed and the
+    future never completed - every node read "unavailable" even when nav2
+    was healthy and active within 3-4s. wait_for_service blocks (bounded, not
+    a sleep) until discovery completes or the timeout expires, so the
+    call_async that follows is only issued once the service is actually
+    reachable.
+
+    The first node pays the FULL cost of DDS graph discovery for this brand
+    new participant (rclpy.init() + node creation happened just before this
+    is called); every later node reuses that same discovered graph, so it
+    only needs a short budget to catch normal per-service jitter.
+
+    Returns {node_name: state_label}; a node whose service is never
+    discovered within its wait_for_service budget, or whose GetState call
+    never responds within `per_service_timeout`, gets the label
+    "unavailable" - same label as before this fix, so callers and printed
+    output are unchanged.
+    """
+    states = {}
+    for i, n in enumerate(nodes):
+        client = clients[n]
+        wait_budget = first_service_timeout if i == 0 else per_service_timeout
+        if not client.wait_for_service(timeout_sec=wait_budget):
+            states[n] = "unavailable"
+            continue
+        future = client.call_async(make_request())
+        spin_until_future_complete(future, timeout_sec=per_service_timeout)
+        result = future.result()
+        states[n] = result.current_state.label if result is not None else "unavailable"
+    return states
+
+
 def get_lifecycle_states(nodes: list[str] = LIFECYCLE, ns: str = NS,
-                          per_service_timeout: float = 3.0) -> dict[str, str]:
+                          per_service_timeout: float = 3.0,
+                          first_service_timeout: float = 10.0) -> dict[str, str]:
     """Query GetState on every lifecycle node's own service from a SINGLE
     rclpy process/node, instead of shelling out `ros2 service call` once per
     node.
 
-    Root cause of the false-negative this replaces: a bare `ros2` CLI
-    invocation costs ~1.4s of process startup on this machine, paid again
-    for every one of the 10 lifecycle nodes. Against a 2.0s per-call
-    timeout that left ~0.6s for the actual service round-trip, so normal
-    DDS/service-discovery jitter during nav2 bring-up read as "not active"
-    on every node, every run. Paying rclpy/node startup exactly once and
-    reusing it for all 10 GetState calls removes that startup cost from the
-    per-node budget entirely, so `per_service_timeout` only has to cover the
-    real round-trip.
+    Root cause of the original false-negative this replaced: a bare `ros2`
+    CLI invocation costs ~1.4s of process startup on this machine, paid again
+    for every one of the 10 lifecycle nodes. Paying rclpy/node startup exactly
+    once and reusing it for all 10 GetState calls removes that startup cost
+    from the per-node budget entirely.
 
-    Returns {node_name: state_label}; a node whose service never responds
-    within `per_service_timeout` gets the label "unavailable".
+    See _lifecycle_states_from_clients for the wait_for_service fix and the
+    reasoning behind the two timeout budgets.
     """
     import rclpy
     from rclpy.node import Node
@@ -124,12 +168,14 @@ def get_lifecycle_states(nodes: list[str] = LIFECYCLE, ns: str = NS,
     node = Node("check_nav2_ready_lifecycle")
     clients = {n: node.create_client(GetState, f"{ns}/{n}/get_state") for n in nodes}
 
-    states = {}
-    for n, client in clients.items():
-        future = client.call_async(GetState.Request())
-        rclpy.spin_until_future_complete(node, future, timeout_sec=per_service_timeout)
-        result = future.result()
-        states[n] = result.current_state.label if result is not None else "unavailable"
+    states = _lifecycle_states_from_clients(
+        nodes, clients,
+        spin_until_future_complete=lambda future, timeout_sec: rclpy.spin_until_future_complete(
+            node, future, timeout_sec=timeout_sec),
+        make_request=GetState.Request,
+        first_service_timeout=first_service_timeout,
+        per_service_timeout=per_service_timeout,
+    )
 
     node.destroy_node()
     rclpy.shutdown()
