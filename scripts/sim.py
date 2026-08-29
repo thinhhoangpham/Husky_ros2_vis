@@ -33,6 +33,21 @@ STATE_FILE = Path.home() / ".husky_sim" / "state.json"
 SIM_LOG = "/tmp/sim.log"
 NAV_LOG = "/tmp/nav.log"
 NAV_DEADLINE = 180.0
+# NAV_DEADLINE is wall-clock but nav2 bring-up is paced by simulated time, so
+# under a slow RTF (CLAUDE.md: full config's camera drags park to 0.10-0.14)
+# the raw deadline is denominated in the wrong clock. Scale it by the
+# measured real_time_factor instead.
+#
+# RTF_FLOOR = 0.05: half the worst measured RTF (0.10), so a genuinely
+# stalled/near-zero RTF still produces a large-but-finite budget rather than
+# a division blow-up toward infinity.
+# NAV_DEADLINE_MAX = 1500.0: at the worst observed RTF (0.12) the scaled
+# budget is 180/0.12 = 1500 s, so the cap is set to exactly cover that case
+# (comfortably above the ~20 s of simulated time 180 s of wall clock buys at
+# RTF 0.12) while still bounding a genuinely dead nav2 stack to 25 minutes
+# rather than letting RTF_FLOOR blow the budget out further.
+RTF_FLOOR = 0.05
+NAV_DEADLINE_MAX = 1500.0
 ROS_SETUP = "source /opt/ros/jazzy/setup.bash"
 
 PHASE_NAMES = ["clean", "config", "launch", "controllers", "robot", "extras", "nav2"]
@@ -339,6 +354,22 @@ def parse_sim_time(stats_msg: str) -> float | None:
     return int(m.group(1) or 0) + int(m.group(2) or 0) / 1e9
 
 
+def parse_rtf(stats_msg: str) -> float | None:
+    m = re.search(r"real_time_factor:\s*([\d.eE+-]+)", stats_msg)
+    if not m:
+        return None
+    try:
+        return float(m.group(1))
+    except ValueError:
+        return None
+
+
+def nav_deadline(rtf: float | None) -> float:
+    if rtf is None:
+        return NAV_DEADLINE
+    return min(NAV_DEADLINE / max(rtf, RTF_FLOOR), NAV_DEADLINE_MAX)
+
+
 def pose_args(ns) -> str:
     return " ".join(f"{k}:={getattr(ns, k)}" for k in ("x", "y", "z", "yaw")
                     if getattr(ns, k) is not None)
@@ -511,18 +542,25 @@ def phase_nav2(shell, world: str, no_nav: bool):
     pid = shell.launch(f"ros2 launch {REPO}/launch/nav_park.launch.py", NAV_LOG)
     last = {"f": ["not checked"]}
 
+    rtf = parse_rtf(shell.world_stats(world))
+    deadline = nav_deadline(rtf)
+    rtf_note = (f"rtf {rtf:.2f}, budget scaled from {NAV_DEADLINE:.0f} s"
+                if rtf is not None else
+                f"rtf unreadable, budget not scaled from {NAV_DEADLINE:.0f} s")
+
     def probe():
         if not shell.pid_alive(pid):
             return "dead"
         last["f"] = shell.nav_ready()
         return "ready" if not last["f"] else None
 
-    v = poll(shell, NAV_DEADLINE, probe, interval=2.0)
+    v = poll(shell, deadline, probe, interval=2.0)
     if v == "dead":
         return PhaseResult(6, "nav2", "fail", f"nav launch (pid {pid}) died - see {NAV_LOG}"), pid
     if v != "ready":
         return PhaseResult(6, "nav2", "fail",
-                           f"not ready after {NAV_DEADLINE:.0f} s: {'; '.join(last['f'][:3])} - see {NAV_LOG}"), pid
+                           f"not ready after {deadline:.0f} s ({rtf_note}): "
+                           f"{'; '.join(last['f'][:3])} - see {NAV_LOG}"), pid
     return PhaseResult(6, "nav2", "ok", "map->odom present, all lifecycle nodes active"), pid
 
 

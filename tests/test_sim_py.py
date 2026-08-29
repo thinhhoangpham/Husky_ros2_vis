@@ -434,11 +434,13 @@ def test_nav_config_only_where_file_exists():
 
 
 class NavShell(FakeShell):
-    def __init__(self, ready_seq):
+    def __init__(self, ready_seq, stats=""):
         super().__init__(); self.ready_seq = list(ready_seq); self.launched = []
+        self.stats = stats
     def launch(self, cmd, log): self.launched.append((cmd, log)); return 900
     def pid_alive(self, pid): return True
     def nav_ready(self): return self.ready_seq.pop(0) if len(self.ready_seq) > 1 else self.ready_seq[0]
+    def world_stats(self, world): return self.stats
 
 
 def test_phase_nav2_skips_without_config_or_with_flag():
@@ -470,6 +472,52 @@ def test_phase_nav2_retries_across_several_slow_passes():
     # the fake clock only advances via shell.pause(interval) between polls,
     # so reaching "ok" here proves multiple probe() calls actually ran.
     assert sh.t > 0
+
+
+from scripts.sim import parse_rtf, nav_deadline, NAV_DEADLINE, NAV_DEADLINE_MAX, RTF_FLOOR
+
+RTF_STATS_FULL = "real_time_factor: 0.12\nsim_time {\n  sec: 12\n}\n"
+RTF_STATS_HEALTHY = "real_time_factor: 1.0\nsim_time {\n  sec: 12\n}\n"
+
+
+def test_parse_rtf():
+    assert parse_rtf(RTF_STATS_FULL) == 0.12
+    assert parse_rtf(RTF_STATS_HEALTHY) == 1.0
+    assert parse_rtf("") is None
+
+
+def test_nav_deadline_unscaled_at_full_rtf():
+    assert nav_deadline(1.0) == NAV_DEADLINE
+
+
+def test_nav_deadline_scaled_but_capped_at_slow_rtf():
+    d = nav_deadline(0.12)
+    assert d > NAV_DEADLINE
+    assert d <= NAV_DEADLINE_MAX
+
+
+def test_nav_deadline_falls_back_when_rtf_unreadable():
+    assert nav_deadline(None) == NAV_DEADLINE
+
+
+def test_phase_nav2_scales_deadline_and_names_rtf_in_fail_detail():
+    """A 'full'-config-speed sim (rtf 0.12) that never becomes ready must be
+    given the scaled budget, not the raw 180 s, and the FAIL detail must
+    name both the measured rtf and the effective deadline used."""
+    sh = NavShell([["planner_server is not active"]], stats=RTF_STATS_FULL)
+    r, _ = phase_nav2(sh, "park", False)
+    assert r.status == "fail"
+    assert "rtf 0.12" in r.detail
+    assert f"{nav_deadline(0.12):.0f} s" in r.detail
+    assert "planner_server" in r.detail
+
+
+def test_phase_nav2_falls_back_to_raw_deadline_when_rtf_unreadable():
+    sh = NavShell([["planner_server is not active"]], stats="")
+    r, _ = phase_nav2(sh, "park", False)
+    assert r.status == "fail"
+    assert "rtf unreadable" in r.detail
+    assert f"{NAV_DEADLINE:.0f} s" in r.detail
 
 
 import json
