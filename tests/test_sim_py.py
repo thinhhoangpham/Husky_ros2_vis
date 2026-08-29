@@ -582,13 +582,22 @@ def test_cmd_status_live_robot_silent_is_not_ready(monkeypatch, tmp_path):
     assert lines[-1].startswith("NOT READY")
 
 
+class ReadOnlyStatusShell(LiveStatusShell):
+    def __init__(self, *a, **kw):
+        super().__init__(*a, **kw)
+        self.launched = []
+    def launch(self, cmd, log):
+        self.launched.append((cmd, log))
+        return 9999
+
+
 def test_cmd_status_is_read_only(monkeypatch, tmp_path):
     import scripts.sim as S
     p = tmp_path / "state.json"; _write_state(p)
     monkeypatch.setattr(S, "STATE_FILE", p)
     monkeypatch.setattr(S, "phase_robot", lambda sh, w, z: PhaseResult(4, "robot", "ok", "d"))
-    sh = LiveStatusShell()
+    sh = ReadOnlyStatusShell()
     cmd_status(sh, out=lambda s: None)
-    assert sh.launched == [] if hasattr(sh, "launched") else True
+    assert sh.launched == []
     assert sh.killed == []
     assert not any("spawner" in c for c in sh.calls)
