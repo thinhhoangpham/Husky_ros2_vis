@@ -348,3 +348,52 @@ def test_phase_robot_ok_detail_reports_counts_not_rates():
     sh = RobotShell({"odom": 1, "imu": 40, "scan": 3, "points": 1}, GZ_MODEL)
     r = phase_robot(sh, "park", None)
     assert r.status == "ok" and "4/4 topics receiving" in r.detail and "Hz" not in r.detail
+
+
+from scripts.sim import extras_features, bridge_args, phase_extras, REPO
+
+FULL_YAML = "platform:\n  extras:\n    urdf:\n      path: /x/extras.urdf.xacro\n"
+FILES = {"/x/extras.urdf.xacro": '<xacro:include filename="/y/compass.urdf.xacro"/>\n<xacro:include filename="/y/comms.urdf.xacro"/>',
+         "/x/extras_radio.urdf.xacro": '<xacro:include filename="/y/comms.urdf.xacro"/>'}
+
+
+def test_extras_features_full_and_radio_and_none():
+    assert extras_features(FULL_YAML, FILES.__getitem__) == {"compass", "radio"}
+    assert extras_features(FULL_YAML.replace("extras.urdf", "extras_radio.urdf"), FILES.__getitem__) == {"radio"}
+    assert extras_features("platform: {}\n", FILES.__getitem__) == set()
+
+
+def test_bridge_args_never_include_gps_or_imu_enu():
+    a = bridge_args({"compass", "radio"})
+    assert any("compass_0/mag" in x for x in a) and any("/husky/rx" in x for x in a)
+    assert not any("gps" in x or "imu_enu" in x for x in a)
+    assert bridge_args(set()) == []
+
+
+def test_phase_extras_skips_for_default():
+    sh = FakeShell(files={f"{REPO}/robot_configs/robot_default.yaml": "platform: {}\n"})
+    r, pid = phase_extras(sh, "default", 4242)
+    assert r.status == "skip" and pid is None
+
+
+def test_phase_extras_bridges_for_full():
+    class Sh(FakeShell):
+        def launch(self, cmd, log): self.calls.append(cmd); return 777
+        def pid_alive(self, pid): return True
+    sh = Sh(files={f"{REPO}/robot_configs/robot_full.yaml": FULL_YAML, **FILES})
+    r, pid = phase_extras(sh, "full", 4242)
+    assert r.status == "ok" and pid == 777
+    assert "parameter_bridge" in sh.calls[-1] and "extras_gz_bridge" in sh.calls[-1]
+
+
+def test_shell_launch_truncates_log(tmp_path):
+    from scripts.sim import Shell
+    log = tmp_path / "log.txt"
+    log.write_text("STALE MARKER FROM PREVIOUS RUN\n")
+    sh = Shell()
+    pid = sh.launch("true", str(log))
+    import time as _t
+    end = _t.monotonic() + 5
+    while sh.pid_alive(pid) and _t.monotonic() < end:
+        _t.sleep(0.05)
+    assert "STALE MARKER" not in log.read_text()

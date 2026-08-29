@@ -190,7 +190,7 @@ class Shell:
         time.sleep(sec)
 
     def launch(self, cmd: str, log: str) -> int:
-        with open(log, "ab") as f:
+        with open(log, "wb") as f:
             p = subprocess.Popen(["bash", "-lc", f"{ROS_SETUP}; exec {cmd}"],
                                  stdout=f, stderr=subprocess.STDOUT,
                                  stdin=subprocess.DEVNULL, start_new_session=True)
@@ -422,6 +422,47 @@ def phase_robot(shell, world: str, z_override: float | None) -> PhaseResult:
     return PhaseResult(4, "robot", "ok",
                        f"pose {pose[0]:.2f} {pose[1]:.2f} {pose[2]:.2f}  "
                        f"{received}/{len(ROBOT_TOPICS)} topics receiving")
+
+
+BRIDGE_LOG = "/tmp/bridge.log"
+
+
+def extras_features(robot_yaml_text: str, read) -> set[str]:
+    doc = yaml.safe_load(robot_yaml_text) or {}
+    path = (((doc.get("platform") or {}).get("extras") or {}).get("urdf") or {}).get("path")
+    if not path:
+        return set()
+    text = read(path)
+    feats = set()
+    if "compass.urdf.xacro" in text:
+        feats.add("compass")
+    if "comms.urdf.xacro" in text:
+        feats.add("radio")
+    return feats
+
+
+def bridge_args(features) -> list[str]:
+    a = []
+    if "compass" in features:
+        a.append(f"{NS}/sensors/compass_0/mag@sensor_msgs/msg/MagneticField[gz.msgs.Magnetometer")
+    if "radio" in features:
+        a += ["/broker/msgs@ros_gz_interfaces/msg/Dataframe]gz.msgs.Dataframe",
+              "/husky/rx@ros_gz_interfaces/msg/Dataframe[gz.msgs.Dataframe",
+              "/base_station/rx@ros_gz_interfaces/msg/Dataframe[gz.msgs.Dataframe"]
+    return a
+
+
+def phase_extras(shell, config: str, launch_pid: int):
+    feats = extras_features(shell.read(f"{REPO}/robot_configs/robot_{config}.yaml"), shell.read)
+    if not feats:
+        return PhaseResult(5, "extras", "skip", f"{config} config has no compass/radio"), None
+    args = " ".join(f"'{a}'" for a in bridge_args(feats))
+    pid = shell.launch(f"ros2 run ros_gz_bridge parameter_bridge {args} "
+                       f"--ros-args -r __node:=extras_gz_bridge", BRIDGE_LOG)
+    ok = poll(shell, 5.0, lambda: shell.pid_alive(pid) and shell.pid_alive(launch_pid))
+    if not ok:
+        return PhaseResult(5, "extras", "fail", f"bridge or launch died - see {BRIDGE_LOG}"), pid
+    return PhaseResult(5, "extras", "ok", f"bridged {' '.join(sorted(feats))} (pid {pid})"), pid
 
 
 # ----------------------------------------------------------------------- CLI
