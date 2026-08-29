@@ -1,99 +1,24 @@
 # Cleaning up before a new simulation
 
-Steps only. Run all of them, in order, before every launch — including when you
-are confident nothing is running.
-Background and rationale live in `CLAUDE.md`.
-
-Launch only after Step 3 passes. Then go to `RUN_SIM.md`.
-
----
-
-## Step 1 — Go to the project
-
 ```bash
 cd ~/Documents/Husky_viz
+python3 scripts/sim.py stop
 ```
 
-## Step 2 — Kill and clear
+**Required: last line `CLEAN`.** `sim.py start` runs this itself, so a
+separate clean pass is only needed to stop a sim without starting another.
 
-Run all three blocks, in this order. The shared memory must be cleared *after*
-the processes are dead, not before.
+## What it does
 
-```bash
-./scripts/kill_sim.sh
-```
+Kills every pid matching `scripts/kill_sim.sh`'s pattern list plus the
+`a200_0000` / `gz sim` / `gz_tools_vendor` sweep (skipping `bash -c`
+wrappers and itself), stops the `ros2` daemon, removes
+`/dev/shm/fastrtps_*` and `sem.fastrtps_*`, then verifies no survivors and
+a `fastrtps` count of 0 — re-reading once because a nonzero first read is
+usually a transient release (CLAUDE.md #12).
 
-```bash
-for pid in $(pgrep -f "a200_0000|gz sim|gz_tools_vendor" 2>/dev/null); do
-  grep -qa "bash -c" /proc/$pid/cmdline 2>/dev/null && continue
-  kill -9 $pid 2>/dev/null
-done
-```
+## If it prints FAIL
 
-```bash
-source /opt/ros/jazzy/setup.bash && ros2 daemon stop 2>/dev/null || true
-```
-
-```bash
-rm -f /dev/shm/fastrtps_* /dev/shm/sem.fastrtps_*
-```
-
-The daemon holds one live FastDDS participant of its own, so it keeps two
-`fastrtps_*` segments alive and recreates them on the next `ros2` command. Stop
-it before the `rm` or Step 3 can never reach `shm : 0` — the count sits at `2`
-with a port number that *changes* between reads. It restarts by itself on the
-next `ros2` CLI call; nothing needs to start it.
-
-Ignore whatever `kill_sim.sh` prints about being clean. Step 3 decides that.
-
-## Step 3 — Verify
-
-```bash
-ps -eo pid,cmd --no-headers | grep -viE "grep|bash -c" \
-  | grep -iE "ros|gazebo|gz |a200|husky|clearpath|rviz"
-echo "opt/ros : $(ps -eo cmd --no-headers | grep -c '^/opt/ros')"
-echo "shm     : $(ls /dev/shm | grep -c fastrtps)"
-```
-
-**Required: no process lines, `opt/ros : 0`, `shm : 0`.**
-
-Acceptable exceptions:
-- a lone `ros2-daemon` python process — the ROS 2 CLI discovery daemon, not the
-  sim. If it is running it also owns two `fastrtps_*` segments, so `shm` reads
-  `2` rather than `0`; that is the daemon, not a leak (its port number changes
-  between reads). Step 2's `ros2 daemon stop` prevents this.
-- `pgrep -c` returning 1–2 with nothing visible in `ps` — your own grep matching itself
-- **a nonzero `shm` count on the first read** — see below
-
-### A nonzero `shm` on the first read is usually transient
-
-Participants killed in Step 2 release their segments as they tear down, which
-takes a moment. A count read immediately after Step 2 can therefore be nonzero
-and still be clearing on its own — observed at `38` twice, dropping to `0`
-seconds later with no further action.
-
-Run the same Step 3 command again — no sleep, no loop, just run it a second time:
-
-- **drops to `0`** → transient, the gate has passed, continue
-- **stays nonzero** → a real leak; go to Step 4
-
-Do not clear `/dev/shm` again to force it. If segments are being recreated rather
-than released, something is still alive and Step 4 will find it — a second `rm`
-only hides that.
-
-Do not launch until this passes.
-
-## Step 4 — If survivors remain
-
-Identify them by name before killing anything else.
-
-```bash
-ps -eo pid,etime,cmd --no-headers | grep -viE "grep|bash -c" \
-  | grep -iE "ros|gazebo|gz |a200|husky|clearpath|rviz"
-```
-
-Read the full command lines, kill what you find, then repeat Step 3.
-
-Report which node type leaked. A process that survived Step 2 means a new node
-type has appeared that the sweep pattern does not cover — that is a change this
-file needs, and the user decides it.
+It lists the survivors by full command line. A survivor means a node type
+the pattern list does not cover — add it to `scripts/kill_sim.sh`'s
+`PATTERNS` (the user decides), never kill it by hand and move on.

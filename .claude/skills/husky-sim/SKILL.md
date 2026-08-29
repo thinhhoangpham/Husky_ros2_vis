@@ -9,21 +9,24 @@ Four runbooks at `/home/thinhpham/Documents/Husky_viz/` are the procedure:
 
 | File | Covers |
 |---|---|
-| `CLEAN_SIM.md` | kill every surviving process, clear stale FastDDS shared memory, verify clean |
-| `RUN_SIM.md` | launch, verify topics and controllers, verify the robot landed |
+| `CLEAN_SIM.md` | `python3 scripts/sim.py stop` — must print `CLEAN` |
+| `RUN_SIM.md` | `python3 scripts/sim.py start <world> [--config full]` — must print `READY` |
 | `NAV_PARK.md` | nav2 + GPS localization in park, goals, routes, avoidance |
 | `DEMO.md` | demo scenarios, one self-contained block each |
 
-They contain steps and nothing else — rationale lives in `CLAUDE.md`, kept out
-deliberately so the runbooks stay executable. They are maintained for demos and
-**they change**. Your memory of last session is not evidence of what they say now.
+`CLEAN_SIM.md` and `RUN_SIM.md` are each now a single `scripts/sim.py`
+command rather than a numbered procedure — `start` cleans, launches and
+verifies every gate itself, and `stop` cleans and verifies. Rationale lives
+in `CLAUDE.md`. They are maintained for demos and **they change**. Your
+memory of last session is not evidence of what they say now.
 
 ## Three laws
 
 **1. No test begins without proof the machine is clean.**
-Not a belief that it is clean. Not "I killed it a minute ago." A `CLEAN_SIM.md`
-Step 3 report, from this attempt, showing `opt/ros : 0`, `shm : 0` and no
-survivor process lines.
+Not a belief that it is clean. Not "I killed it a minute ago." A
+`python3 scripts/sim.py start <world>` run ending in the `READY` verdict
+line (it cleans first), or a `stop` run ending in `CLEAN` if no start
+follows.
 
 **2. Every command in a test comes from a runbook, verbatim.**
 Not an equivalent you composed. If the sequence you need isn't in a runbook, that
@@ -42,55 +45,40 @@ Every sim operation is one pass through this. There is no entry point in the
 middle.
 
 ```
-CLEAN_SIM.md  →  RUN_SIM.md  →  [NAV_PARK.md]  →  [the test]
-   verify         verify           verify          measure
+sim.py start  →  [NAV_PARK.md]  →  [the test]
+  READY            verify          measure
 ```
 
 ### Phase 0 — before anything
 
 State which runbooks this operation needs and read each one **in full, now**.
-Not a section, not from memory, not from this skill. Then list the numbered steps
-you are about to run, in the file's order, so a missing step is visible before it
-costs anything.
+Not a section, not from memory, not from this skill. For `NAV_PARK.md` /
+`DEMO.md`, list the numbered steps you are about to run, in the file's order,
+so a missing step is visible before it costs anything.
 
-### Phase 1 — clean
+### Phase 1 — clean, launch and verify
 
-Execute `CLEAN_SIM.md` verbatim.
+Run `python3 scripts/sim.py start <world> [--config full]` (see `RUN_SIM.md`;
+`CLEAN_SIM.md` is folded into this — it cleans before doing anything else, so
+no separate pass is needed). Relay every phase line it prints and the final
+verdict line verbatim. Every phase it checks is a gate, including the ones
+that look redundant — several exist precisely because an earlier hand-run
+procedure passed while the sim was broken:
 
-Two structural traps its ordering exists to avoid, neither visible from reading
-the commands:
+- The `controllers` phase exists because `imu_0/data` publishes straight from
+  the Gazebo sensor and is structurally blind to a dead controller spawner. A
+  sim used to pass every gate with `platform_velocity_controller` absent —
+  `sim.py` queries `list_controllers` directly and recovers with
+  `--switch-timeout 30` if needed (CLAUDE.md gotcha #27).
+- If it prints `FAIL <n> <phase>: <observation>`, report that line plus the
+  last ~30 lines of the log it names (`/tmp/sim.log`, `/tmp/bridge.log`, or
+  `/tmp/nav.log`). Do not re-run and do not investigate — that is the finding.
 
-- **`kill_sim.sh` verifies with the same node-name list it kills with**, so it
-  cannot detect what it does not kill. Its list has been wrong three times here —
-  Clearpath's teleop stack, then the camera image bridges, then `joy_linux_node`
-  and `clock_bridge`. Step 3 checks on a deliberately broader pattern than Step 2
-  kills with. Never accept `kill_sim.sh`'s own "clean" message; it once printed it
-  with 73 processes alive.
-- **Clearing `/dev/shm` before the processes are dead makes the count go up**,
-  because survivors immediately recreate their segments — and the cleanup then
-  reads as done when it is not.
+Gate: the verdict line reads `READY ...`. Do not proceed to a test until it
+does. To stop without starting another sim, run
+`python3 scripts/sim.py stop` — required last line `CLEAN`.
 
-A survivor is not a nuisance to kill quietly. It is the finding: it means the
-sweep pattern is incomplete, which is a change `CLEAN_SIM.md` needs. Report which
-node type leaked.
-
-Gate: `opt/ros : 0`, `shm : 0`, no survivor lines. Do not launch until it holds.
-
-### Phase 2 — launch and verify
-
-Execute `RUN_SIM.md` verbatim. Every gate it states is a gate, including the ones
-that look redundant — several exist precisely because an earlier version passed
-while the sim was broken:
-
-- Step 4's controller check exists because `imu_0/data` publishes straight from
-  the Gazebo sensor and is structurally blind to a dead controller spawner. A sim
-  passed every gate with `platform_velocity_controller` absent.
-- Step 5's renderer check exists because physics and the GUI can disagree.
-
-Report the measured value against the expected one. "Looks right" is not a
-result; `z = 3.1196` against an expected `~3.12` is.
-
-### Phase 3 — the test
+### Phase 2 — the test
 
 Only now. And the test itself follows the same rules: its steps come from
 `NAV_PARK.md` or `DEMO.md`, verbatim.
@@ -101,7 +89,7 @@ add the block to `DEMO.md` first. A test that exists only in a chat message
 cannot be reproduced by whoever opens the file next, and its result is worth
 correspondingly less.
 
-**Between two tests, return to Phase 1.** A second test on a world that already
+**Between two tests, return to Phase 1.** (re-run `sim.py start`) A second test on a world that already
 has a spawned object, a robot 20 m off its spawn pose, or an aborted goal in its
 history is not the same test. State-dependent results are how a passing number
 gets attached to a broken system.

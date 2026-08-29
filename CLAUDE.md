@@ -76,20 +76,19 @@ a step fails, fix the file rather than working around it.**
 | `DEMO.md` | demo scenarios, one self-contained block each |
 
 All four are covered by the single `husky-sim` skill
-(`.claude/skills/husky-sim/`). The former `husky-sim-restart` and
-`husky-run-sim` skills were removed on 2026-08-27 — do not reference them.
+(`.claude/skills/husky-sim/`). The two per-runbook skills that preceded it
+were removed on 2026-08-27 — do not reference them.
 
-`CLEAN_SIM.md` runs first and must report `opt/ros : 0` / `shm : 0` before
-`RUN_SIM.md` Step 3. This section covers the surrounding context; the runbooks
-cover the doing.
+`scripts/sim.py start|stop|status` is the single entry point (2026-08-28);
+`CLEAN_SIM.md` and `RUN_SIM.md` now wrap it. This section covers the
+surrounding context; the runbooks cover the doing.
 
-**`RUN_SIM.md` was reduced on 2026-08-27 to Steps 1-3 — robot config and
-launch only.** The verification gates it used to carry (topics, controller
-state, robot landed, renderer) and the whole autonomous-navigation section are
-gone. Nothing replaced them, so a launch is no longer gated by anything: after
-Step 3 confirm what the task actually needs, and confirm it with
-`ros2 topic info -v` on specific topics rather than a topic listing
-(gotcha #38).
+`sim.py start` cleans, applies the config, launches, verifies controllers
+and the robot, bridges compass/radio, and brings up nav2 — every gate
+`RUN_SIM.md` used to carry by hand is back, now enforced by the command
+itself rather than by a human following steps. If a task needs something
+beyond its gates, confirm it with `ros2 topic info -v` on specific topics
+rather than a topic listing (gotcha #38).
 
 **Never run sim commands from the main conversation. Route every sim
 operation — start, stop, restart, verify, demo — to the `sim-operator` agent**
@@ -116,7 +115,9 @@ that is the only reliable check that a declared sensor will actually publish.
 **Never wait on a sim launch with a fixed sleep, and never delegate the check
 to a script that loops/sleeps internally either — that is the same thing
 wearing a different hat. Check readiness yourself, directly, with one-shot
-commands, and report immediately:**
+commands, and report immediately:** `sim.py` polls a real signal (sim_time
+advancing, a received message, a service reply) under a per-phase deadline —
+that is the sanctioned form.
 
 ```bash
 ros2 topic list 2>/dev/null | grep -E "platform/odom|imu_0/data|lidar2d_0/scan|lidar3d_0/points"
@@ -595,6 +596,10 @@ timed out and then reached `Successfully switched controllers`. It succeeds
 because the switch completes as soon as the world finishes loading and the
 update loop runs; the 30 s budget simply spans the stall that the stock 5 s
 does not (gotcha #37).
+
+**Handled by `scripts/sim.py` Phase 3** — it queries `list_controllers` once
+the world is stepping and re-runs the spawner with `--switch-timeout 30`
+only when a controller is not active, logging `clean` or `recovered`.
 
 **28. The prior park map deliberately omits the 15 `arbol4` small trees**
 (3.10 m across, 4.11 m tall) so they have to be avoided from live lidar

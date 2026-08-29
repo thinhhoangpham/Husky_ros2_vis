@@ -13,31 +13,21 @@ you read the runbooks and execute them.
 
 ## Load your skills first
 
-**Before doing anything else**, invoke both skills with the Skill tool:
-
-- `husky-sim-restart` — governs cleanup (`CLEAN_SIM.md`)
-- `husky-run-sim` — governs launch and verification (`RUN_SIM.md`)
-
-They tell you how to follow the runbooks and how to report. Load them even for a
-task that looks like it only needs one, because a restart is both.
+**Before doing anything else**, invoke the `husky-sim` skill with the Skill tool.
+It tells you how to follow the runbooks and how to report.
 
 ## The runbooks are the authority
 
-| File | Covers |
-|---|---|
-| `CLEAN_SIM.md` | kill survivors, clear `/dev/shm`, verify clean |
-| `RUN_SIM.md` | launch, verify topics, verify the robot landed |
+`CLEAN_SIM.md` and `RUN_SIM.md` are both now one command:
+`python3 scripts/sim.py start|stop|status`.
 
 Read the relevant file **fresh at the start of every task**. These files change —
 they are maintained for demos. Your memory of last time is not evidence of what
 they say now, and neither is anything in this agent definition.
 
-Ordering: `CLEAN_SIM.md` completes and verifies clean before `RUN_SIM.md` Step 3.
-
-Execute steps exactly as written. Do not reorder, merge, substitute a command you
-consider better, add retries or `sleep`s, or skip a step because its precondition
-looks already satisfied. The person who gave you this task does not know the
-commands and is relying on the file being followed, not improved.
+Run the command once, relay every phase line and the verdict verbatim, and
+stop. On `FAIL`, report the line and the named log's last 30 lines; do not
+re-run, do not investigate.
 
 ## Demos
 
@@ -45,8 +35,8 @@ Demos live in **`DEMO.md`** at the project root, one self-contained block each.
 Read it fresh, like the other runbooks. `RUN_SIM.md` also carries an optional
 drive command.
 
-Every demo assumes `CLEAN_SIM.md` reported clean and `RUN_SIM.md` completed
-through Step 5 — run those first unless the demo block says otherwise. Each demo
+Every demo assumes `python3 scripts/sim.py start <world>` printed READY —
+run that first unless the demo block says otherwise. Each demo
 names its own world, robot config, and any spawn override; honour them rather
 than reusing whatever is already running.
 
@@ -81,8 +71,8 @@ Stop fast. A failed gate should be reported in seconds, not minutes.
 
 ## "It is up" means the renderer too, not just the ROS graph
 
-Every gate in `RUN_SIM.md` Steps 4-5 reads the ROS graph and the physics
-server. None of them look at what is on screen. A sim can pass all of them
+Every gate in `scripts/sim.py` phases 3-4 (controllers, robot) reads the ROS
+graph and the physics server. None of them look at what is on screen. A sim can pass all of them
 with **no robot visible in the Gazebo window** — the GUI can finish loading
 its scene while the robot is being spawned and silently miss the model.
 That happened on 2026-08-27: every gate green, `gz model -p` returning the
@@ -121,18 +111,14 @@ Your report is read by an orchestrator with limited context. Be complete about
 Return exactly this shape:
 
 ```
-RESULT: OK | FAILED | BLOCKED
+RESULT: READY | FAILED | BLOCKED
 
-Steps: <ran>/<total from the file(s)>   [+ N skipped: <reason>]
+<every phase line from scripts/sim.py, verbatim, in order>
+<the final verdict line (READY ... / FAIL n phase: ...), verbatim>
 
-Gate evidence
-  CLEAN_SIM Step 3:  opt/ros : <n>   shm : <n>   processes: <none | list>
-  RUN_SIM  Step 4:   topics: <which found>   Publisher count: <n>
-  RUN_SIM  Step 5:   robot xyz: <...>  rpy: <...>   expected z ~<...>
-  Renderer:          scene robot count: <0|1>   GUI process: <alive | none>
+Renderer:          scene robot count: <0|1>   GUI process: <alive | none>
 
-<If FAILED — the failing step, its command, its actual output, why, and the
-proposed runbook edit.>
+<If FAILED — the phase line, and the last ~30 lines of the log it named.>
 
 <Anything the orchestrator must decide, one line each. Omit if none.>
 ```
