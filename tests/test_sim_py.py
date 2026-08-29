@@ -440,3 +440,96 @@ def test_phase_nav2_fails_reporting_last_failures():
     sh = NavShell([["planner_server is not active"]])
     r, _ = phase_nav2(sh, "park", False)
     assert r.status == "fail" and "planner_server" in r.detail
+
+
+import json
+from scripts.sim import cmd_start, cmd_stop, cmd_status, save_state, load_state
+from scripts.sim import PHASE_NAMES
+
+
+def _patched(monkeypatch, results):
+    """Replace every phase with a stub returning the scripted PhaseResult."""
+    import scripts.sim as S
+    monkeypatch.setattr(S, "phase_clean", lambda sh: results[0])
+    monkeypatch.setattr(S, "phase_config", lambda sh, c: results[1])
+    monkeypatch.setattr(S, "phase_launch", lambda sh, w, p: (results[2], 4242))
+    monkeypatch.setattr(S, "phase_controllers", lambda sh: results[3])
+    monkeypatch.setattr(S, "phase_robot", lambda sh, w, z: results[4])
+    monkeypatch.setattr(S, "phase_extras", lambda sh, c, lp: (results[5], None))
+    monkeypatch.setattr(S, "phase_nav2", lambda sh, w, n: (results[6], 900))
+
+
+OK7 = [PhaseResult(i, PHASE_NAMES[i], "ok", "d") for i in range(7)]
+
+
+def test_cmd_start_prints_every_phase_and_ready(monkeypatch, tmp_path):
+    import scripts.sim as S
+    monkeypatch.setattr(S, "STATE_FILE", tmp_path / "state.json")
+    _patched(monkeypatch, OK7)
+    lines = []
+    rc = cmd_start(FakeShell(), parse_args(["start", "park"]), out=lines.append)
+    assert rc == 0 and lines[-1] == "READY park default nav"
+    assert lines[0].startswith("[0 clean") and lines[6].startswith("[6 nav2")
+    st = json.loads((tmp_path / "state.json").read_text())
+    assert st["world"] == "park" and st["launch_pid"] == 4242 and st["phase_reached"] == 6
+
+
+def test_cmd_start_stops_at_first_fail_and_leaves_sim_running(monkeypatch, tmp_path):
+    import scripts.sim as S
+    monkeypatch.setattr(S, "STATE_FILE", tmp_path / "state.json")
+    rs = list(OK7); rs[3] = PhaseResult(3, "controllers", "fail", "boom")
+    _patched(monkeypatch, rs)
+    cleaned = []
+    monkeypatch.setattr(S, "phase_clean", lambda sh: cleaned.append(1) or OK7[0])
+    lines = []
+    rc = cmd_start(FakeShell(), parse_args(["start", "park"]), out=lines.append)
+    assert rc == 13 and lines[-1] == "FAIL 3 controllers: boom"
+    assert len(lines) == 5 and cleaned == [1]          # phase 0 only, no clean-on-fail
+
+
+def test_cmd_start_clean_on_fail(monkeypatch, tmp_path):
+    import scripts.sim as S
+    monkeypatch.setattr(S, "STATE_FILE", tmp_path / "state.json")
+    rs = list(OK7); rs[2] = PhaseResult(2, "launch", "fail", "dead")
+    _patched(monkeypatch, rs)
+    cleaned = []
+    monkeypatch.setattr(S, "phase_clean", lambda sh: cleaned.append(1) or OK7[0])
+    rc = cmd_start(FakeShell(), parse_args(["start", "park", "--clean-on-fail"]), out=lambda s: None)
+    assert rc == 12 and cleaned == [1, 1]
+
+
+def test_cmd_start_ready_line_omits_nav_when_skipped(monkeypatch, tmp_path):
+    import scripts.sim as S
+    monkeypatch.setattr(S, "STATE_FILE", tmp_path / "state.json")
+    rs = list(OK7); rs[6] = PhaseResult(6, "nav2", "skip", "no config")
+    _patched(monkeypatch, rs)
+    lines = []
+    cmd_start(FakeShell(), parse_args(["start", "lake"]), out=lines.append)
+    assert lines[-1] == "READY lake default"
+
+
+def test_cmd_stop_prints_clean_and_removes_state(monkeypatch, tmp_path):
+    import scripts.sim as S
+    p = tmp_path / "state.json"; p.write_text("{}")
+    monkeypatch.setattr(S, "STATE_FILE", p)
+    monkeypatch.setattr(S, "phase_clean", lambda sh: OK7[0])
+    lines = []
+    assert cmd_stop(FakeShell(), out=lines.append) == 0
+    assert lines[-1] == "CLEAN" and not p.exists()
+
+
+def test_save_and_load_state_roundtrip(tmp_path):
+    p = tmp_path / "s.json"
+    save_state(p, {"world": "park"})
+    assert load_state(p) == {"world": "park"}
+    assert load_state(tmp_path / "missing.json") is None
+
+
+def test_cmd_status_no_state_file_does_not_crash(monkeypatch, tmp_path):
+    import scripts.sim as S
+    monkeypatch.setattr(S, "STATE_FILE", tmp_path / "state.json")
+    lines = []
+    rc = cmd_status(FakeShell(run_out={"list_controllers": ""}), out=lines.append)
+    assert any(l.startswith("no state file") for l in lines)
+    assert lines[-1].startswith("NOT READY") or lines[-1].startswith("READY")
+    assert rc in (0, exit_code([PhaseResult(2, "launch", "fail", "")]))

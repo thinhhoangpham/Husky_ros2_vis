@@ -15,6 +15,7 @@ from __future__ import annotations
 import argparse
 import contextlib
 import io
+import json
 import os
 import re
 import subprocess
@@ -519,10 +520,116 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     return p.parse_args(argv)
 
 
+def save_state(path: Path, d: dict) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(d, indent=2))
+
+
+def load_state(path: Path):
+    try:
+        return json.loads(path.read_text())
+    except (FileNotFoundError, json.JSONDecodeError):
+        return None
+
+
+def cmd_start(shell, args, out=print) -> int:
+    results: list[PhaseResult] = []
+    state = {"world": args.world, "config": args.config, "launch_pid": None,
+             "bridge_pid": None, "nav_pid": None, "started_at": time.time(), "phase_reached": -1}
+
+    def record(r: PhaseResult) -> bool:
+        results.append(r)
+        out(format_line(r))
+        state["phase_reached"] = r.phase
+        return r.status != "fail"
+
+    def finish() -> int:
+        save_state(STATE_FILE, state)
+        rc = exit_code(results)
+        if rc:
+            f = results[-1]
+            out(f"FAIL {f.phase} {f.name}: {f.detail}")
+            if getattr(args, "clean_on_fail", False):
+                record(phase_clean(shell))
+        else:
+            nav = " nav" if results[6].status == "ok" else ""
+            out(f"READY {args.world} {args.config}{nav}")
+        return rc
+
+    if not record(phase_clean(shell)):
+        return finish()
+    if not record(phase_config(shell, args.config)):
+        return finish()
+    r, pid = phase_launch(shell, args.world, pose_args(args))
+    state["launch_pid"] = pid
+    save_state(STATE_FILE, state)
+    if not record(r):
+        return finish()
+    if not record(phase_controllers(shell)):
+        return finish()
+    if not record(phase_robot(shell, args.world, args.z)):
+        return finish()
+    r, bpid = phase_extras(shell, args.config, pid)
+    state["bridge_pid"] = bpid
+    if not record(r):
+        return finish()
+    r, npid = phase_nav2(shell, args.world, args.no_nav)
+    state["nav_pid"] = npid
+    record(r)
+    return finish()
+
+
+def cmd_stop(shell, out=print) -> int:
+    r = phase_clean(shell)
+    out(format_line(r))
+    try:
+        STATE_FILE.unlink()
+    except FileNotFoundError:
+        pass
+    out("CLEAN" if r.status == "ok" else f"FAIL 0 clean: {r.detail}")
+    return exit_code([r])
+
+
+def cmd_status(shell, out=print) -> int:
+    st = load_state(STATE_FILE) or {}
+    if not st:
+        out("no state file - probing anyway")
+    world, config = st.get("world", "?"), st.get("config", "?")
+    results = []
+    lp = st.get("launch_pid")
+    alive = bool(lp) and shell.pid_alive(lp)
+    t1 = parse_sim_time(shell.world_stats(world)) if world != "?" else None
+    t2 = parse_sim_time(shell.world_stats(world)) if t1 is not None else None
+    stepping = t1 is not None and t2 is not None and t2 > t1
+    results.append(PhaseResult(2, "launch", "ok" if alive and stepping else "fail",
+                               f"pid {lp} alive={alive} stepping={stepping}"))
+    cs = _query_controllers(shell)
+    ok = all(cs.get(c) == "active" for c in CONTROLLERS)
+    results.append(PhaseResult(3, "controllers", "ok" if ok else "fail", _describe(cs) or "both active"))
+    if world != "?":
+        results.append(phase_robot(shell, world, None))
+    bp = st.get("bridge_pid")
+    if bp:
+        results.append(PhaseResult(5, "extras", "ok" if shell.pid_alive(bp) else "fail", f"bridge pid {bp}"))
+    np_ = st.get("nav_pid")
+    if np_:
+        f = shell.nav_ready() if shell.pid_alive(np_) else ["nav launch dead"]
+        results.append(PhaseResult(6, "nav2", "ok" if not f else "fail", "; ".join(f[:3]) or "ready"))
+    for r in results:
+        out(format_line(r))
+    rc = exit_code(results)
+    out(f"{'READY' if rc == 0 else 'NOT READY'} {world} {config}")
+    return rc
+
+
 def main(argv: list[str] | None = None) -> int:
     args = parse_args(sys.argv[1:] if argv is None else argv)
-    print(f"sim.py: {args.cmd} not implemented yet", file=sys.stderr)
-    return 2
+    shell = Shell()
+    if args.cmd == "start":
+        return cmd_start(shell, args)
+    if args.cmd == "stop":
+        return cmd_stop(shell)
+    return cmd_status(shell)
 
 
 if __name__ == "__main__":
