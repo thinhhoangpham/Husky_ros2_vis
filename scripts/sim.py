@@ -189,6 +189,16 @@ class Shell:
     def pause(self, sec: float) -> None:
         time.sleep(sec)
 
+    def launch(self, cmd: str, log: str) -> int:
+        with open(log, "ab") as f:
+            p = subprocess.Popen(["bash", "-lc", f"{ROS_SETUP}; exec {cmd}"],
+                                 stdout=f, stderr=subprocess.STDOUT,
+                                 stdin=subprocess.DEVNULL, start_new_session=True)
+        return p.pid
+
+    def world_stats(self, world: str) -> str:
+        return self.run(f"gz topic -e -t /world/{world}/stats -n 1", timeout=5)
+
 
 def poll(shell, deadline_s: float, probe, interval: float = 0.5):
     """Call `probe()` until it returns truthy or the deadline passes.
@@ -254,6 +264,47 @@ def phase_config(shell, config: str) -> PhaseResult:
         return PhaseResult(1, "config", "fail",
                            f"{config}: declared but absent from SDF: {' '.join(missing)} (CLAUDE.md #1)")
     return PhaseResult(1, "config", "ok", f"{config}  (sensors: {' '.join(sorted(sdf))})")
+
+
+LAUNCH_DEADLINE = 90.0
+
+
+def parse_sim_time(stats_msg: str) -> float | None:
+    m = re.search(r"sim_time \{\s*(?:sec: (\d+))?\s*(?:nsec: (\d+))?\s*\}", stats_msg)
+    if not m or (m.group(1) is None and m.group(2) is None):
+        return None
+    return int(m.group(1) or 0) + int(m.group(2) or 0) / 1e9
+
+
+def pose_args(ns) -> str:
+    return " ".join(f"{k}:={getattr(ns, k)}" for k in ("x", "y", "z", "yaw")
+                    if getattr(ns, k) is not None)
+
+
+def phase_launch(shell, world: str, pose: str) -> tuple[PhaseResult, int]:
+    cmd = f"ros2 launch {REPO}/launch/park_sim.launch.py world:={world} {pose}".strip()
+    pid = shell.launch(cmd, SIM_LOG)
+    t0 = shell.now()
+    last = {"t": None}
+
+    def probe():
+        if not shell.pid_alive(pid):
+            return "dead"
+        t = parse_sim_time(shell.world_stats(world))
+        prev, last["t"] = last["t"], t
+        if t is not None and prev is not None and t > prev:
+            return "stepping"
+        return None
+
+    v = poll(shell, LAUNCH_DEADLINE, probe, interval=1.0)
+    if v == "dead":
+        return PhaseResult(2, "launch", "fail",
+                           f"ros2 launch (pid {pid}) is no longer running - see {SIM_LOG}"), pid
+    if v != "stepping":
+        return PhaseResult(2, "launch", "fail",
+                           f"{world} not stepping after {LAUNCH_DEADLINE:.0f} s (sim_time={last['t']}) - see {SIM_LOG}"), pid
+    return PhaseResult(2, "launch", "ok",
+                       f"pid {pid}, {world} stepping after {shell.now() - t0:.1f} s"), pid
 
 
 # ----------------------------------------------------------------------- CLI

@@ -204,3 +204,48 @@ def test_phase_config_fails_on_unknown_config():
     sh = FakeShell(files={})
     r = phase_config(sh, "nope")
     assert r.status == "fail" and "robot_nope.yaml" in r.detail
+
+
+from scripts.sim import parse_sim_time, pose_args, phase_launch
+
+STATS = "sim_time {\n  sec: 12\n  nsec: 345000000\n}\nreal_time {\n  sec: 30\n}\niterations: 4115\n"
+
+
+def test_parse_sim_time():
+    assert parse_sim_time(STATS) == 12.345
+    assert parse_sim_time("") is None
+
+
+def test_pose_args_only_for_set_flags():
+    a = parse_args(["start", "park", "--z", "4.0", "--yaw", "3.05"])
+    assert pose_args(a) == "z:=4.0 yaw:=3.05"
+    assert pose_args(parse_args(["start", "park"])) == ""
+
+
+class LaunchShell(FakeShell):
+    def __init__(self, stats_seq, alive=True):
+        super().__init__(); self.stats_seq = list(stats_seq); self.alive = alive; self.launched = []
+    def launch(self, cmd, log): self.launched.append((cmd, log)); return 4242
+    def pid_alive(self, pid): return self.alive
+    def world_stats(self, world): return self.stats_seq.pop(0) if len(self.stats_seq) > 1 else self.stats_seq[0]
+
+
+def test_phase_launch_ok_when_sim_time_advances():
+    s1 = STATS; s2 = STATS.replace("sec: 12", "sec: 13")
+    sh = LaunchShell([ "", s1, s1, s2 ])
+    r, pid = phase_launch(sh, "park", "")
+    assert r.status == "ok" and pid == 4242 and "stepping" in r.detail
+    assert "world:=park" in sh.launched[0][0] and sh.launched[0][1] == "/tmp/sim.log"
+
+
+def test_phase_launch_fails_when_launch_dies():
+    sh = LaunchShell([""], alive=False)
+    r, _ = phase_launch(sh, "park", "")
+    assert r.status == "fail" and "no longer running" in r.detail
+
+
+def test_phase_launch_fails_when_sim_time_stalls():
+    sh = LaunchShell([STATS])       # same value forever
+    sh.t = 0.0
+    r, _ = phase_launch(sh, "park", "")
+    assert r.status == "fail" and "not stepping" in r.detail
