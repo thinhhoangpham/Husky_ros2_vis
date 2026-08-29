@@ -13,6 +13,8 @@ effects so gates are unit-testable without a simulator.
 from __future__ import annotations
 
 import argparse
+import contextlib
+import io
 import os
 import re
 import subprocess
@@ -29,6 +31,7 @@ ROBOT_MODEL = "a200_0000/robot"
 STATE_FILE = Path.home() / ".husky_sim" / "state.json"
 SIM_LOG = "/tmp/sim.log"
 NAV_LOG = "/tmp/nav.log"
+NAV_DEADLINE = 60.0
 ROS_SETUP = "source /opt/ros/jazzy/setup.bash"
 
 PHASE_NAMES = ["clean", "config", "launch", "controllers", "robot", "extras", "nav2"]
@@ -229,6 +232,12 @@ class Shell:
 
     def gz_pose(self) -> str:
         return self.run(f"gz model -m {ROBOT_MODEL} -p", timeout=10)
+
+    def nav_ready(self) -> list[str]:
+        sys.path.append(REPO)
+        from tools.check_nav2_ready import nav_ready
+        with contextlib.redirect_stdout(io.StringIO()):     # its per-check prints are noise here
+            return nav_ready(lambda cmd, timeout=None: self.run(cmd, timeout=timeout or 30))
 
 
 def poll(shell, deadline_s: float, probe, interval: float = 0.5):
@@ -463,6 +472,35 @@ def phase_extras(shell, config: str, launch_pid: int):
     if not ok:
         return PhaseResult(5, "extras", "fail", f"bridge or launch died - see {BRIDGE_LOG}"), pid
     return PhaseResult(5, "extras", "ok", f"bridged {' '.join(sorted(feats))} (pid {pid})"), pid
+
+
+def nav_config(world: str):
+    p = f"{REPO}/config/nav2_{world}.yaml"
+    return p if os.path.exists(p) else None
+
+
+def phase_nav2(shell, world: str, no_nav: bool):
+    cfg = nav_config(world)
+    if cfg is None:
+        return PhaseResult(6, "nav2", "skip", f"no config/nav2_{world}.yaml"), None
+    if no_nav:
+        return PhaseResult(6, "nav2", "skip", "--no-nav"), None
+    pid = shell.launch(f"ros2 launch {REPO}/launch/nav_park.launch.py", NAV_LOG)
+    last = {"f": ["not checked"]}
+
+    def probe():
+        if not shell.pid_alive(pid):
+            return "dead"
+        last["f"] = shell.nav_ready()
+        return "ready" if not last["f"] else None
+
+    v = poll(shell, NAV_DEADLINE, probe, interval=2.0)
+    if v == "dead":
+        return PhaseResult(6, "nav2", "fail", f"nav launch (pid {pid}) died - see {NAV_LOG}"), pid
+    if v != "ready":
+        return PhaseResult(6, "nav2", "fail",
+                           f"not ready after {NAV_DEADLINE:.0f} s: {'; '.join(last['f'][:3])} - see {NAV_LOG}"), pid
+    return PhaseResult(6, "nav2", "ok", "map->odom present, all lifecycle nodes active"), pid
 
 
 # ----------------------------------------------------------------------- CLI

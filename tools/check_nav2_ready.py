@@ -97,14 +97,12 @@ def check_transform() -> bool:
     return found
 
 
-def main() -> int:
+def nav_ready(sh=sh, tf_check=check_transform) -> list[str]:
+    """Run every readiness check; return the list of failures (empty == READY)."""
     failures = []
-
     print("== transforms")
-    ok = check_transform()
-    if not ok:
+    if not tf_check():
         failures.append("map -> odom not published (GPS localization not up?)")
-
     print("== lifecycle nodes")
     # `ros2 lifecycle get` resolves node names via `ros2 node list`, which
     # returned empty here even though every node's services are live and
@@ -114,13 +112,12 @@ def main() -> int:
     # actually reflects whether the node is up.
     for n in LIFECYCLE:
         out = sh(f"ros2 service call {NS}/{n}/get_state lifecycle_msgs/srv/GetState "
-                  f"'{{}}' 2>/dev/null", timeout=5.0)
+                 f"'{{}}' 2>/dev/null", timeout=5.0)
         good = "label='active'" in out
         print(f"  {n:30s}: {'active' if good else 'NOT ACTIVE'}")
         if not good:
             reason = out.strip()[:80] or "no response (service unavailable within 5s)"
             failures.append(f"{n} is not active (get_state: {reason})")
-
     print("== action servers")
     acts = sh("ros2 action list 2>/dev/null")
     for a in ("navigate_to_pose", "follow_waypoints"):
@@ -128,7 +125,6 @@ def main() -> int:
         print(f"  {a:30s}: {'OK' if ok else 'MISSING'}")
         if not ok:
             failures.append(f"action {a} not advertised")
-
     print("== cmd_vel contract (gotcha #3)")
     info = sh(f"ros2 topic info -v {NS}/cmd_vel 2>/dev/null")
     stamped = "geometry_msgs/msg/TwistStamped" in info
@@ -139,7 +135,6 @@ def main() -> int:
         failures.append("cmd_vel type mismatch: nav2 publishes Twist, robot needs TwistStamped")
     elif not stamped:
         failures.append("cmd_vel has no TwistStamped publisher")
-
     print("== costmaps")
     for t in (f"{NS}/global_costmap/costmap", f"{NS}/local_costmap/costmap"):
         n = sh(f"ros2 topic info {t} 2>/dev/null | grep -c 'Publisher count: 1'").strip()
@@ -147,7 +142,11 @@ def main() -> int:
         print(f"  {t.split('/')[-2]:30s}: {'OK' if ok else 'no publisher'}")
         if not ok:
             failures.append(f"{t} has no publisher")
+    return failures
 
+
+def main() -> int:
+    failures = nav_ready()
     if failures:
         print("\nNOT READY:")
         for f in failures:

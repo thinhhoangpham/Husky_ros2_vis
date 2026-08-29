@@ -406,3 +406,37 @@ def test_shell_launch_truncates_log(tmp_path, monkeypatch):
         if alive:
             _t.sleep(0.02)
     assert "STALE MARKER" not in log.read_text()
+
+
+from scripts.sim import nav_config, phase_nav2
+
+
+def test_nav_config_only_where_file_exists():
+    assert nav_config("park") == f"{REPO}/config/nav2_park.yaml"
+    assert nav_config("lake") is None
+
+
+class NavShell(FakeShell):
+    def __init__(self, ready_seq):
+        super().__init__(); self.ready_seq = list(ready_seq); self.launched = []
+    def launch(self, cmd, log): self.launched.append((cmd, log)); return 900
+    def pid_alive(self, pid): return True
+    def nav_ready(self): return self.ready_seq.pop(0) if len(self.ready_seq) > 1 else self.ready_seq[0]
+
+
+def test_phase_nav2_skips_without_config_or_with_flag():
+    assert phase_nav2(NavShell([[]]), "lake", False)[0].status == "skip"
+    assert phase_nav2(NavShell([[]]), "park", True)[0].status == "skip"
+
+
+def test_phase_nav2_ok_when_failures_drain():
+    sh = NavShell([["map -> odom not published"], []])
+    r, pid = phase_nav2(sh, "park", False)
+    assert r.status == "ok" and pid == 900 and sh.launched[0][1] == "/tmp/nav.log"
+    assert "nav_park.launch.py" in sh.launched[0][0]
+
+
+def test_phase_nav2_fails_reporting_last_failures():
+    sh = NavShell([["planner_server is not active"]])
+    r, _ = phase_nav2(sh, "park", False)
+    assert r.status == "fail" and "planner_server" in r.detail
