@@ -626,7 +626,7 @@ class LiveStatusShell(FakeShell):
 
 
 def _write_state(path, **overrides):
-    st = {"world": "park", "config": "default", "launch_pid": 4242,
+    st = {"world": "park", "config": "default", "no_nav": False, "launch_pid": 4242,
           "bridge_pid": 5000, "nav_pid": 900, "started_at": 0, "phase_reached": 6}
     st.update(overrides)
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -644,7 +644,10 @@ def test_cmd_status_live_all_good_invokes_phase_robot(monkeypatch, tmp_path):
     lines = []
     rc = cmd_status(sh, out=lines.append)
     assert rc == 0
-    assert lines[-1] == "READY park default"
+    # park has a nav2 config and this state's nav_pid is alive+ready, so
+    # status - like start - must require and confirm it, not merely note it
+    # if present (CLAUDE.md review finding 2).
+    assert lines[-1] == "READY park default nav"
     assert calls == [("park", None)]
 
 
@@ -703,7 +706,10 @@ def test_main_exits_2_with_fail_line_when_ros_not_sourced(monkeypatch, capsys):
     rc = main(["start", "park"])
     out = capsys.readouterr().out
     assert rc == 2
-    assert out.strip().startswith("FAIL 0 env:")
+    # "FAIL env:" not "FAIL 0 env:" - the latter collided with the real
+    # phase 0 (clean), which has its own documented exit code 10
+    # (CLAUDE.md review finding 5).
+    assert out.strip().startswith("FAIL env:")
 
 
 from tools.check_nav2_ready import _lifecycle_states_from_clients
@@ -799,3 +805,128 @@ def test_lifecycle_states_unresponsive_call_async_still_labelled_unavailable():
         ["map_server"], clients, spin_until_future_complete=_noop_spin,
         make_request=object, first_service_timeout=10.0, per_service_timeout=3.0)
     assert states == {"map_server": "unavailable"}
+
+
+# ------------------------------------------------------- review fix wave
+
+def test_pid_alive_detects_exited_child_not_a_zombie(tmp_path, monkeypatch):
+    """Finding 1: os.kill(pid, 0) reports True for a zombie (exited but not
+    reaped), so a bridge/launch that dies instantly used to read as alive
+    forever. Prove pid_alive is now truthful for a REAL short-lived process
+    this Shell actually spawned - bounded, hermetic, no ROS."""
+    import time as _t
+    import scripts.sim as sim
+    monkeypatch.setattr(sim, "ROS_SETUP", ":")
+    sh = sim.Shell()
+    log = tmp_path / "log.txt"
+    pid = sh.launch("true", str(log))
+    end = _t.monotonic() + 5
+    while sh.pid_alive(pid) and _t.monotonic() < end:
+        _t.sleep(0.02)
+    assert sh.pid_alive(pid) is False
+
+
+def test_pid_alive_falls_back_to_kill_probe_for_foreign_pid():
+    """`status` reads pids back from the state file across process
+    boundaries, where there is no Popen to consult - that path must still
+    work via the os.kill(pid, 0) probe."""
+    import scripts.sim as sim
+    sh = sim.Shell()
+    assert sh.pid_alive(os.getpid()) is True
+    assert sh.pid_alive(999999) is False
+
+
+import os  # noqa: E402 (kept local to this section, mirrors sim.py's own import)
+
+
+def test_phase_extras_confirms_liveness_at_end_of_window_not_at_start():
+    """Finding 1c: poll used to return on the FIRST truthy probe, so a
+    bridge that dies at t=1s (within the 5s window) still passed if it was
+    alive when first checked. Prove the fail path is reached when the
+    fake shell reports dead partway through the window."""
+    class Sh(FakeShell):
+        def __init__(self):
+            super().__init__(files={f"{REPO}/robot_configs/robot_full.yaml": FULL_YAML, **FILES})
+            self.polls = 0
+        def launch(self, cmd, log): return 777
+        def pid_alive(self, pid):
+            self.polls += 1
+            return self.polls < 3  # alive on first checks, dies mid-window
+    sh = Sh()
+    r, pid = phase_extras(sh, "full", 4242)
+    assert r.status == "fail" and "died" in r.detail
+
+
+def test_cmd_status_fails_when_nav_required_but_pid_missing(monkeypatch, tmp_path):
+    """Finding 2: a start that never reached phase 6 (spawner race, etc.)
+    leaves nav_pid None forever. status must FAIL nav2 for a world that has
+    a nav2 config, not silently skip the phase and print READY."""
+    import scripts.sim as S
+    p = tmp_path / "state.json"
+    _write_state(p, nav_pid=None)
+    monkeypatch.setattr(S, "STATE_FILE", p)
+    monkeypatch.setattr(S, "phase_robot", lambda sh, w, z: PhaseResult(4, "robot", "ok", "d"))
+    sh = LiveStatusShell()
+    lines = []
+    rc = cmd_status(sh, out=lines.append)
+    assert rc == 16
+    assert any(l.startswith("[6 nav2") and "fail" in l for l in lines)
+    assert lines[-1].startswith("NOT READY")
+
+
+def test_cmd_status_skips_nav_requirement_when_no_nav_recorded(monkeypatch, tmp_path):
+    """A deliberate --no-nav start must not be misread as 'nav2 never got
+    there' - status must distinguish the two via the recorded no_nav flag."""
+    import scripts.sim as S
+    p = tmp_path / "state.json"
+    _write_state(p, nav_pid=None, no_nav=True)
+    monkeypatch.setattr(S, "STATE_FILE", p)
+    monkeypatch.setattr(S, "phase_robot", lambda sh, w, z: PhaseResult(4, "robot", "ok", "d"))
+    sh = LiveStatusShell()
+    lines = []
+    rc = cmd_status(sh, out=lines.append)
+    assert rc == 0
+    assert lines[-1] == "READY park default"
+
+
+def test_cmd_start_records_no_nav_flag(monkeypatch, tmp_path):
+    import scripts.sim as S
+    monkeypatch.setattr(S, "STATE_FILE", tmp_path / "state.json")
+    _patched(monkeypatch, OK7)
+    cmd_start(FakeShell(), parse_args(["start", "park", "--no-nav"]), out=lambda s: None)
+    st = json.loads((tmp_path / "state.json").read_text())
+    assert st["no_nav"] is True
+
+
+def test_main_wraps_unhandled_exception_in_a_verdict_line(monkeypatch, capsys):
+    """Finding 3: an unhandled exception anywhere in dispatch must still
+    produce a single FAIL line and a documented exit code, not a bare
+    traceback."""
+    import scripts.sim as S
+    monkeypatch.setattr(S, "check_ros_env", lambda: None)
+
+    class BoomShell:
+        pass
+
+    monkeypatch.setattr(S, "Shell", lambda: BoomShell())
+
+    def boom(sh, args, out=print):
+        raise RuntimeError("kaboom")
+    monkeypatch.setattr(S, "cmd_start", boom)
+    rc = S.main(["start", "park"])
+    out = capsys.readouterr().out
+    assert rc == 2
+    assert "FAIL start: kaboom" in out
+
+
+def test_main_env_failure_uses_non_phase_prefix(monkeypatch, capsys):
+    """Finding 5: 'FAIL 0 env: ...' collided with the real phase 0 (clean),
+    which has its own documented exit code 10. Must not share the '0'
+    prefix with a real phase number."""
+    import scripts.sim as S
+    monkeypatch.setattr(S, "check_ros_env", lambda: "ROS 2 is not sourced")
+    rc = S.main(["status"])
+    out = capsys.readouterr().out
+    assert rc == 2
+    assert "FAIL env: ROS 2 is not sourced" in out
+    assert "FAIL 0" not in out

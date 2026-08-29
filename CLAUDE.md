@@ -195,6 +195,12 @@ silently *dropped* GPS until that was caught by `RUN_SIM.md` Step 4 failing, so
 if you add a sensor to `default`, add it to `full` too or the superset claim
 quietly stops being true.
 
+**`scripts/sim.py start park --config full` currently fails phase 6.** nav2's
+lifecycle bring-up stalls under `full` (`filter_mask_server`,
+`costmap_filter_info_server`, `controller_server` never activate) — a known
+open nav2 bring-up issue, not a `sim.py` regression. `default` is the
+verified path for park.
+
 ## Ported worlds — `park`, `lake`
 
 Ported from the ROS 1 `natural_environments_ros_opt` dataset. This is a **Gazebo

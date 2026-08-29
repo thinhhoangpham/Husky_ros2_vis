@@ -173,6 +173,12 @@ class Shell:
         self.self_pid = os.getpid()
         self.self_path = os.path.abspath(__file__)
         self.last_rc = 0
+        # Popen objects for children THIS process spawned, keyed by pid, so
+        # pid_alive can consult Popen.poll() instead of os.kill(pid, 0) -
+        # the latter reports True for a zombie (exited, not yet reaped),
+        # which is exactly the false-positive that let a dead bridge/launch
+        # read as "alive" (CLAUDE.md review finding 1).
+        self._children: dict[int, subprocess.Popen] = {}
 
     def run(self, cmd: str, timeout: float = 30) -> str:
         full = f'set -eo pipefail; {ROS_SETUP}; {cmd}'
@@ -218,6 +224,14 @@ class Shell:
         return Path(path).read_text()
 
     def pid_alive(self, pid: int) -> bool:
+        # A child we spawned ourselves: ask the OS for its real exit status
+        # via Popen.poll(), which reaps it and returns non-None once it has
+        # exited. `status` reads pids back from the state file across
+        # process boundaries, where there is no Popen to consult, so that
+        # case falls back to the os.kill(pid, 0) probe.
+        p = self._children.get(pid)
+        if p is not None:
+            return p.poll() is None
         try:
             os.kill(pid, 0)
             return True
@@ -235,6 +249,7 @@ class Shell:
             p = subprocess.Popen(["bash", "-lc", f"{ROS_SETUP}; exec {cmd}"],
                                  stdout=f, stderr=subprocess.STDOUT,
                                  stdin=subprocess.DEVNULL, start_new_session=True)
+        self._children[p.pid] = p
         return p.pid
 
     def world_stats(self, world: str) -> str:
@@ -253,20 +268,28 @@ class Shell:
         from rclpy.node import Node
         from rclpy.qos import qos_profile_sensor_data
         rclpy.init()
-        node = Node("sim_py_receive")
-        counts = {k: 0 for k in topics}
-        for k, (topic, typ) in topics.items():
-            pkg, _, cls = typ.split("/")
-            msg_cls = getattr(importlib.import_module(f"{pkg}.msg"), cls)
-            node.create_subscription(msg_cls, topic,
-                                     lambda _m, k=k: counts.__setitem__(k, counts[k] + 1),
-                                     qos_profile_sensor_data)
-        t0 = time.monotonic()
-        while time.monotonic() - t0 < deadline and not all(counts.values()):
-            rclpy.spin_once(node, timeout_sec=0.1)
-        node.destroy_node()
-        rclpy.shutdown()
-        return counts
+        node = None
+        try:
+            node = Node("sim_py_receive")
+            counts = {k: 0 for k in topics}
+            for k, (topic, typ) in topics.items():
+                pkg, _, cls = typ.split("/")
+                msg_cls = getattr(importlib.import_module(f"{pkg}.msg"), cls)
+                node.create_subscription(msg_cls, topic,
+                                         lambda _m, k=k: counts.__setitem__(k, counts[k] + 1),
+                                         qos_profile_sensor_data)
+            t0 = time.monotonic()
+            while time.monotonic() - t0 < deadline and not all(counts.values()):
+                rclpy.spin_once(node, timeout_sec=0.1)
+            return counts
+        finally:
+            # If subscribing/spinning raises, rclpy must still be shut down
+            # here - otherwise a later rclpy.init() (e.g. in nav_ready())
+            # fails too, poisoning the rest of the same run (CLAUDE.md
+            # review finding 3).
+            if node is not None:
+                node.destroy_node()
+            rclpy.shutdown()
 
     def gz_pose(self) -> str:
         return self.run(f"gz model -m {ROBOT_MODEL} -p", timeout=10)
@@ -522,8 +545,20 @@ def phase_extras(shell, config: str, launch_pid: int):
     args = " ".join(f"'{a}'" for a in bridge_args(feats))
     pid = shell.launch(f"ros2 run ros_gz_bridge parameter_bridge {args} "
                        f"--ros-args -r __node:=extras_gz_bridge", BRIDGE_LOG)
-    ok = poll(shell, 5.0, lambda: shell.pid_alive(pid) and shell.pid_alive(launch_pid))
-    if not ok:
+
+    # A bridge advertises its topics whether or not anything is behind them
+    # (CLAUDE.md: run_husky_sim.sh waited 12 s for exactly this reason), so
+    # confirming liveness at t=0 is not a check at all - `poll` returning on
+    # the FIRST truthy probe made this an instantaneous check, not "still
+    # alive after a few seconds" (CLAUDE.md review finding 1c). Instead,
+    # fail fast if death is detected during the window, but only confirm
+    # success by checking liveness again once the window has fully elapsed.
+    def dead_probe():
+        return "dead" if not (shell.pid_alive(pid) and shell.pid_alive(launch_pid)) else None
+
+    if poll(shell, 5.0, dead_probe) == "dead":
+        return PhaseResult(5, "extras", "fail", f"bridge or launch died - see {BRIDGE_LOG}"), pid
+    if not (shell.pid_alive(pid) and shell.pid_alive(launch_pid)):
         return PhaseResult(5, "extras", "fail", f"bridge or launch died - see {BRIDGE_LOG}"), pid
     return PhaseResult(5, "extras", "ok", f"bridged {' '.join(sorted(feats))} (pid {pid})"), pid
 
@@ -594,8 +629,9 @@ def load_state(path: Path):
 
 def cmd_start(shell, args, out=print) -> int:
     results: list[PhaseResult] = []
-    state = {"world": args.world, "config": args.config, "launch_pid": None,
-             "bridge_pid": None, "nav_pid": None, "started_at": time.time(), "phase_reached": -1}
+    state = {"world": args.world, "config": args.config, "no_nav": args.no_nav,
+             "launch_pid": None, "bridge_pid": None, "nav_pid": None,
+             "started_at": time.time(), "phase_reached": -1}
 
     def record(r: PhaseResult) -> bool:
         results.append(r)
@@ -668,17 +704,47 @@ def cmd_status(shell, out=print) -> int:
     results.append(PhaseResult(3, "controllers", "ok" if ok else "fail", _describe(cs) or "both active"))
     if world != "?":
         results.append(phase_robot(shell, world, None))
+
+    # What must be running is derived from CONFIGURATION, not from what a
+    # past `start` happened to record - a start that failed at phase 3/4
+    # leaves bridge_pid/nav_pid as None forever, and checking only `if bp` /
+    # `if np_` let a later status skip those phases entirely and print
+    # READY with no bridge and no nav2 running (CLAUDE.md review finding 2).
+    try:
+        required_feats = (extras_features(shell.read(f"{REPO}/robot_configs/robot_{config}.yaml"), shell.read)
+                          if config != "?" else set())
+    except (FileNotFoundError, KeyError):
+        required_feats = set()
+
     bp = st.get("bridge_pid")
-    if bp:
-        results.append(PhaseResult(5, "extras", "ok" if shell.pid_alive(bp) else "fail", f"bridge pid {bp}"))
+    bp_alive = bool(bp) and shell.pid_alive(bp)
+    if required_feats:
+        results.append(PhaseResult(5, "extras", "ok" if bp_alive else "fail",
+                                   f"bridge pid {bp}" if bp_alive else
+                                   f"{config} requires {' '.join(sorted(required_feats))} "
+                                   "but the extras bridge is not running"))
+    elif bp:
+        results.append(PhaseResult(5, "extras", "ok" if bp_alive else "fail", f"bridge pid {bp}"))
+
+    nav_required = world != "?" and nav_config(world) is not None and not st.get("no_nav", False)
     np_ = st.get("nav_pid")
-    if np_:
-        f = shell.nav_ready() if shell.pid_alive(np_) else ["nav launch dead"]
+    np_alive = bool(np_) and shell.pid_alive(np_)
+    if nav_required:
+        if np_alive:
+            f = shell.nav_ready()
+            results.append(PhaseResult(6, "nav2", "ok" if not f else "fail", "; ".join(f[:3]) or "ready"))
+        else:
+            results.append(PhaseResult(6, "nav2", "fail",
+                           f"nav2 is required for {world} but the nav launch is not running"))
+    elif np_:
+        f = shell.nav_ready() if np_alive else ["nav launch dead"]
         results.append(PhaseResult(6, "nav2", "ok" if not f else "fail", "; ".join(f[:3]) or "ready"))
+
     for r in results:
         out(format_line(r))
     rc = exit_code(results)
-    out(f"{'READY' if rc == 0 else 'NOT READY'} {world} {config}")
+    nav_ok = any(r.phase == 6 and r.status == "ok" for r in results)
+    out(f"{'READY' if rc == 0 else 'NOT READY'} {world} {config}{' nav' if nav_ok else ''}")
     return rc
 
 
@@ -703,14 +769,27 @@ def main(argv: list[str] | None = None) -> int:
     args = parse_args(sys.argv[1:] if argv is None else argv)
     err = check_ros_env()
     if err:
-        print(f"FAIL 0 env: {err}")
+        # "FAIL env: ..." (not "FAIL 0 env: ...") - a bare phase-0 prefix
+        # would collide with the real phase 0 (clean), which has its own
+        # documented exit code 10 (CLAUDE.md review finding 5).
+        print(f"FAIL env: {err}")
         return 2
     shell = Shell()
-    if args.cmd == "start":
-        return cmd_start(shell, args)
-    if args.cmd == "stop":
-        return cmd_stop(shell)
-    return cmd_status(shell)
+    try:
+        if args.cmd == "start":
+            return cmd_start(shell, args)
+        if args.cmd == "stop":
+            return cmd_stop(shell)
+        return cmd_status(shell)
+    except Exception as e:
+        # Every phase eventually does something that can raise outside the
+        # gates' own error handling (spawn_z's regex over a moved file,
+        # Shell.receive, Shell.read via _patterns, ...). Without this, that
+        # raises a bare traceback and an undocumented exit code, breaking
+        # the "last line is the verdict" contract (CLAUDE.md review
+        # finding 3).
+        print(f"FAIL {args.cmd}: {e}")
+        return 2
 
 
 if __name__ == "__main__":

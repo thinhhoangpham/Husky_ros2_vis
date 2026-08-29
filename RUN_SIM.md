@@ -21,6 +21,12 @@ bridges compass/radio when the config has them, and brings up nav2 when
 `config/nav2_<world>.yaml` exists (`--no-nav` to skip). Pose overrides:
 `--x --y --z --yaw`.
 
+`--config full` on a world with a nav2 config (park) currently fails phase 6:
+nav2's lifecycle bring-up stalls under `full` (`filter_mask_server`,
+`costmap_filter_info_server`, `controller_server` never activate). This is a
+known open nav2 bring-up issue, not a `sim.py` regression; `default` is the
+verified path.
+
 ## Step 2 — Read the output
 
 Expected shape (park):
@@ -44,7 +50,7 @@ running for inspection (`--clean-on-fail` to tear it down instead).
 |---|---|
 | 0 | READY |
 | 10–16 | phase 0–6 failed (10 clean, 11 config, 12 launch, 13 controllers, 14 robot, 15 extras, 16 nav2) |
-| 2 | usage |
+| 2 | usage, ROS not sourced (`FAIL env: ...`), or an unhandled exception (`FAIL <cmd>: ...`) |
 
 Logs: `/tmp/sim.log`, `/tmp/bridge.log`, `/tmp/nav.log`.
 
