@@ -147,6 +147,23 @@ def test_find_sim_pids_skips_malformed_ps_line():
     assert found == [(50, "gz sim -r park.sdf")]
 
 
+from scripts.sim import gz_world_name
+
+
+def test_gz_world_name_resolves_mismatched_sdf_name(tmp_path):
+    (tmp_path / "warehouse_ext.sdf").write_text("<sdf><world name='warehouse'></world></sdf>")
+    assert gz_world_name("warehouse_ext", worlds_dir=str(tmp_path)) == "warehouse"
+
+
+def test_gz_world_name_matches_basename(tmp_path):
+    (tmp_path / "park.sdf").write_text("<sdf><world name='park'></world></sdf>")
+    assert gz_world_name("park", worlds_dir=str(tmp_path)) == "park"
+
+
+def test_gz_world_name_falls_back_to_basename_when_file_missing(tmp_path):
+    assert gz_world_name("nope", worlds_dir=str(tmp_path)) == "nope"
+
+
 from scripts.sim import declared_sensors, parse_sdf_sensors, phase_config
 
 ROBOT_YAML = """

@@ -92,6 +92,28 @@ def declared_sensors(robot_yaml_text: str) -> set[str]:
     return out
 
 
+def gz_world_name(world: str, worlds_dir: str = f"{REPO}/worlds") -> str:
+    """Resolve the gz world NAME declared inside worlds/<world>.sdf.
+
+    warehouse_ext.sdf and warehouse_ramp.sdf both declare
+    `<world name='warehouse'>` -- NOT their file basename -- so any
+    /world/<name>/... gz topic or service must be addressed by this value,
+    not by the file basename. Falls back to the basename if the file is
+    missing or carries no `<world name=...>` attribute (park.sdf and
+    lake.sdf both match their basename already, so the fallback is a no-op
+    for them). Does NOT change what is passed as the launch file's
+    `world:=` argument or the spawn-pose lookup key -- those correctly use
+    the basename.
+    """
+    path = Path(worlds_dir) / f"{world}.sdf"
+    try:
+        text = path.read_text()
+    except OSError:
+        return world
+    m = re.search(r"<world\s+name=['\"]([^'\"]+)['\"]", text)
+    return m.group(1) if m else world
+
+
 def parse_sdf_sensors(apply_output: str) -> set[str]:
     out, inblock = set(), False
     for line in apply_output.splitlines():
@@ -201,7 +223,7 @@ class Shell:
         return p.pid
 
     def world_stats(self, world: str) -> str:
-        return self.run(f"gz topic -e -t /world/{world}/stats -n 1", timeout=5)
+        return self.run(f"gz topic -e -t /world/{gz_world_name(world)}/stats -n 1", timeout=5)
 
     def receive(self, topics: dict, deadline: float) -> dict[str, int]:
         """Deadline-bounded liveness check, NOT a rate measurement: subscribes

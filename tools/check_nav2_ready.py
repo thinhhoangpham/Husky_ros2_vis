@@ -97,7 +97,46 @@ def check_transform() -> bool:
     return found
 
 
-def nav_ready(sh=sh, tf_check=check_transform) -> list[str]:
+def get_lifecycle_states(nodes: list[str] = LIFECYCLE, ns: str = NS,
+                          per_service_timeout: float = 3.0) -> dict[str, str]:
+    """Query GetState on every lifecycle node's own service from a SINGLE
+    rclpy process/node, instead of shelling out `ros2 service call` once per
+    node.
+
+    Root cause of the false-negative this replaces: a bare `ros2` CLI
+    invocation costs ~1.4s of process startup on this machine, paid again
+    for every one of the 10 lifecycle nodes. Against a 2.0s per-call
+    timeout that left ~0.6s for the actual service round-trip, so normal
+    DDS/service-discovery jitter during nav2 bring-up read as "not active"
+    on every node, every run. Paying rclpy/node startup exactly once and
+    reusing it for all 10 GetState calls removes that startup cost from the
+    per-node budget entirely, so `per_service_timeout` only has to cover the
+    real round-trip.
+
+    Returns {node_name: state_label}; a node whose service never responds
+    within `per_service_timeout` gets the label "unavailable".
+    """
+    import rclpy
+    from rclpy.node import Node
+    from lifecycle_msgs.srv import GetState
+
+    rclpy.init()
+    node = Node("check_nav2_ready_lifecycle")
+    clients = {n: node.create_client(GetState, f"{ns}/{n}/get_state") for n in nodes}
+
+    states = {}
+    for n, client in clients.items():
+        future = client.call_async(GetState.Request())
+        rclpy.spin_until_future_complete(node, future, timeout_sec=per_service_timeout)
+        result = future.result()
+        states[n] = result.current_state.label if result is not None else "unavailable"
+
+    node.destroy_node()
+    rclpy.shutdown()
+    return states
+
+
+def nav_ready(sh=sh, tf_check=check_transform, lifecycle_check=get_lifecycle_states) -> list[str]:
     """Run every readiness check; return the list of failures (empty == READY)."""
     failures = []
     print("== transforms")
@@ -107,16 +146,18 @@ def nav_ready(sh=sh, tf_check=check_transform) -> list[str]:
     # `ros2 lifecycle get` resolves node names via `ros2 node list`, which
     # returned empty here even though every node's services are live and
     # answering (verified with `ros2 service list` / a direct service call)
-    # - a daemon node-discovery gap, not a lifecycle problem. Call
-    # GetState on each node's own service directly instead, which is what
-    # actually reflects whether the node is up.
+    # - a daemon node-discovery gap, not a lifecycle problem. Call GetState
+    # on each node's own service directly instead (via a single in-process
+    # rclpy node — see get_lifecycle_states), which is what actually
+    # reflects whether the node is up.
+    states = lifecycle_check()
     for n in LIFECYCLE:
-        out = sh(f"ros2 service call {NS}/{n}/get_state lifecycle_msgs/srv/GetState "
-                 f"'{{}}' 2>/dev/null", timeout=2.0)
-        good = "label='active'" in out
+        state = states.get(n, "unavailable")
+        good = state == "active"
         print(f"  {n:30s}: {'active' if good else 'NOT ACTIVE'}")
         if not good:
-            reason = out.strip()[:80] or "no response (service unavailable within 2s)"
+            reason = (f"label='{state}'" if state != "unavailable"
+                      else "no response (service unavailable within 3s)")
             failures.append(f"{n} is not active (get_state: {reason})")
     print("== action servers")
     acts = sh("ros2 action list 2>/dev/null")
