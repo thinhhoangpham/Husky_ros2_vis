@@ -18,6 +18,7 @@ import re
 import subprocess
 import sys
 import time
+import yaml
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -31,6 +32,8 @@ NAV_LOG = "/tmp/nav.log"
 ROS_SETUP = "source /opt/ros/jazzy/setup.bash"
 
 PHASE_NAMES = ["clean", "config", "launch", "controllers", "robot", "extras", "nav2"]
+
+SENSOR_TYPES = ("camera", "lidar2d", "lidar3d", "imu", "gps")
 
 # ---- pure gates
 
@@ -73,6 +76,31 @@ def find_sim_pids(ps_lines: str, patterns: list[str], self_pid: int,
 
 def shm_count(ls_dev_shm: str) -> int:
     return sum(1 for n in ls_dev_shm.split() if "fastrtps" in n)
+
+
+def declared_sensors(robot_yaml_text: str) -> set[str]:
+    doc = yaml.safe_load(robot_yaml_text) or {}
+    out = set()
+    for t in SENSOR_TYPES:
+        for i, s in enumerate((doc.get("sensors") or {}).get(t) or []):
+            if s.get("urdf_enabled", True) or s.get("launch_enabled", True):
+                out.add(f"{t}_{i}")
+    return out
+
+
+def parse_sdf_sensors(apply_output: str) -> set[str]:
+    out, inblock = set(), False
+    for line in apply_output.splitlines():
+        if line.startswith("==> sensors in SDF:"):
+            inblock = True
+            continue
+        if inblock:
+            m = re.match(r"\s+(\S+)\s+->\s+\S+", line)
+            if m:
+                out.add(m.group(1))
+            else:
+                inblock = False
+    return out
 
 
 @dataclass
@@ -211,6 +239,21 @@ def phase_clean(shell) -> PhaseResult:
     if n:
         return PhaseResult(0, "clean", "fail", f"shm {n} persists after kill (something is alive)")
     return PhaseResult(0, "clean", "ok", f"killed {len(victims)}, shm 0")
+
+
+def phase_config(shell, config: str) -> PhaseResult:
+    path = f"{REPO}/robot_configs/robot_{config}.yaml"
+    try:
+        declared = declared_sensors(shell.read(path))
+    except (FileNotFoundError, KeyError):
+        return PhaseResult(1, "config", "fail", f"no such config: robot_{config}.yaml")
+    out = shell.run(f"{REPO}/scripts/apply_config.sh {config}", timeout=180)
+    sdf = parse_sdf_sensors(out)
+    missing = sorted(declared - sdf)
+    if missing:
+        return PhaseResult(1, "config", "fail",
+                           f"{config}: declared but absent from SDF: {' '.join(missing)} (CLAUDE.md #1)")
+    return PhaseResult(1, "config", "ok", f"{config}  (sensors: {' '.join(sorted(sdf))})")
 
 
 # ----------------------------------------------------------------------- CLI

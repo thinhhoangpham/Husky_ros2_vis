@@ -145,3 +145,62 @@ def test_find_sim_pids_skips_malformed_ps_line():
     lines = "garbage line with no pid\n  50 gz sim -r park.sdf\n"
     found = find_sim_pids(lines, ["gz sim"], self_pid=1, self_path="/scripts/sim.py")
     assert found == [(50, "gz sim -r park.sdf")]
+
+
+from scripts.sim import declared_sensors, parse_sdf_sensors, phase_config
+
+ROBOT_YAML = """
+sensors:
+  camera:
+  - model: intel_realsense
+    urdf_enabled: true
+    launch_enabled: true
+  imu:
+  - model: microstrain_imu
+    urdf_enabled: true
+    launch_enabled: true
+  gps:
+  - model: garmin_18x
+    urdf_enabled: false
+    launch_enabled: true
+  lidar2d:
+  - model: hokuyo_ust
+    urdf_enabled: false
+    launch_enabled: false
+"""
+
+APPLY_OUT = """==> applied robot_default.yaml
+==> regenerated URDF, params and launch files
+==> sensors in SDF:
+    imu_0  ->  imu
+    gps_0  ->  navsat
+    camera_0  ->  rgbd_camera
+"""
+
+
+def test_declared_sensors_indexes_by_type_and_skips_fully_disabled():
+    assert declared_sensors(ROBOT_YAML) == {"camera_0", "imu_0", "gps_0"}
+
+
+def test_parse_sdf_sensors():
+    assert parse_sdf_sensors(APPLY_OUT) == {"imu_0", "gps_0", "camera_0"}
+
+
+def test_phase_config_ok_when_declared_subset_of_sdf():
+    sh = FakeShell(files={"/home/thinhpham/Documents/Husky_viz/robot_configs/robot_default.yaml": ROBOT_YAML},
+                   run_out={"apply_config.sh default": APPLY_OUT})
+    r = phase_config(sh, "default")
+    assert r.status == "ok" and "camera_0 gps_0 imu_0" in r.detail
+
+
+def test_phase_config_fails_naming_missing_sensor():
+    sh = FakeShell(files={"/home/thinhpham/Documents/Husky_viz/robot_configs/robot_default.yaml": ROBOT_YAML},
+                   run_out={"apply_config.sh default": APPLY_OUT.replace("    camera_0  ->  rgbd_camera\n", "")})
+    r = phase_config(sh, "default")
+    assert r.status == "fail" and "camera_0" in r.detail
+
+
+def test_phase_config_fails_on_unknown_config():
+    sh = FakeShell(files={})
+    r = phase_config(sh, "nope")
+    assert r.status == "fail" and "robot_nope.yaml" in r.detail
