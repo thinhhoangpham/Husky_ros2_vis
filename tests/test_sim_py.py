@@ -532,4 +532,63 @@ def test_cmd_status_no_state_file_does_not_crash(monkeypatch, tmp_path):
     rc = cmd_status(FakeShell(run_out={"list_controllers": ""}), out=lines.append)
     assert any(l.startswith("no state file") for l in lines)
     assert lines[-1].startswith("NOT READY") or lines[-1].startswith("READY")
-    assert rc in (0, exit_code([PhaseResult(2, "launch", "fail", "")]))
+    assert rc == 12
+
+
+class LiveStatusShell(FakeShell):
+    """Alive launch pid, stepping sim time, active controllers, alive bridge."""
+    def __init__(self, alive=True, stats_seq=None, list_out=LIST_OK, ready=None):
+        super().__init__(run_out={"list_controllers": list_out})
+        self.alive = alive
+        self.stats_seq = list(stats_seq) if stats_seq is not None else [STATS, STATS.replace("sec: 12", "sec: 13")]
+        self.ready = [] if ready is None else ready
+    def pid_alive(self, pid): return self.alive
+    def world_stats(self, world): return self.stats_seq.pop(0) if len(self.stats_seq) > 1 else self.stats_seq[0]
+    def nav_ready(self): return self.ready
+
+
+def _write_state(path, **overrides):
+    st = {"world": "park", "config": "default", "launch_pid": 4242,
+          "bridge_pid": 5000, "nav_pid": 900, "started_at": 0, "phase_reached": 6}
+    st.update(overrides)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(st))
+    return st
+
+
+def test_cmd_status_live_all_good_invokes_phase_robot(monkeypatch, tmp_path):
+    import scripts.sim as S
+    p = tmp_path / "state.json"; _write_state(p)
+    monkeypatch.setattr(S, "STATE_FILE", p)
+    calls = []
+    monkeypatch.setattr(S, "phase_robot", lambda sh, w, z: (calls.append((w, z)) or PhaseResult(4, "robot", "ok", "d")))
+    sh = LiveStatusShell()
+    lines = []
+    rc = cmd_status(sh, out=lines.append)
+    assert rc == 0
+    assert lines[-1] == "READY park default"
+    assert calls == [("park", None)]
+
+
+def test_cmd_status_live_robot_silent_is_not_ready(monkeypatch, tmp_path):
+    import scripts.sim as S
+    p = tmp_path / "state.json"; _write_state(p)
+    monkeypatch.setattr(S, "STATE_FILE", p)
+    monkeypatch.setattr(S, "phase_robot", lambda sh, w, z: PhaseResult(4, "robot", "fail", "silent"))
+    sh = LiveStatusShell()
+    lines = []
+    rc = cmd_status(sh, out=lines.append)
+    assert rc == 14
+    assert lines[-1].startswith("NOT READY")
+
+
+def test_cmd_status_is_read_only(monkeypatch, tmp_path):
+    import scripts.sim as S
+    p = tmp_path / "state.json"; _write_state(p)
+    monkeypatch.setattr(S, "STATE_FILE", p)
+    monkeypatch.setattr(S, "phase_robot", lambda sh, w, z: PhaseResult(4, "robot", "ok", "d"))
+    sh = LiveStatusShell()
+    cmd_status(sh, out=lambda s: None)
+    assert sh.launched == [] if hasattr(sh, "launched") else True
+    assert sh.killed == []
+    assert not any("spawner" in c for c in sh.calls)
