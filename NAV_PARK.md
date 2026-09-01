@@ -1,20 +1,37 @@
 # NAV_PARK.md - autonomous navigation in park
 
 Steps only. If a step fails, fix the file rather than working around it.
-Step 1 cleans automatically — no separate `CLEAN_SIM.md` pass is needed.
+Step 1 runs `RUN_SIM.md` Part A, which does **not** clean itself — its A1 is a
+full `CLEAN_SIM.md` pass.
 
-The stack: `launch/park_stock.launch.py` brings up GPS localization and nav2
-under one lifecycle manager (`lifecycle_manager_navigation`), which owns the
-map server and every nav2 node. Global position in `map` comes from GPS only,
-heading from the ENU-referenced IMU, and wheel odometry is fused as velocity
-only, never position (`config/gps_localization.yaml`). Goals are kept on the
-terrain by `tools/nav_goal.py`, not by a costmap filter. `collision_monitor`
-is in the command path: `cmd_vel_smoothed` -> `cmd_vel`, stock Clearpath wiring, nothing
-bypasses it.
+The stack: `launch/park_stock.launch.py world_and_robot:=false` brings up GPS
+localization and nav2 under one lifecycle manager
+(`lifecycle_manager_navigation`), which owns the map server and every nav2
+node. `world_and_robot:=false` is mandatory — the default `true` starts the
+world and robot from the same invocation and renders an empty park (gotcha
+#39). Global position in `map` comes from GPS only, heading from the
+ENU-referenced IMU, and wheel odometry is fused as velocity only, never
+position (`config/gps_localization.yaml`). Goals are kept on the terrain by
+`tools/nav_goal.py`'s `in_terrain()` alone — the keepout mask and both
+costmaps' `keepout_filter` were removed on 2026-08-31 (gotcha #30).
+`collision_monitor` is in the command path: `cmd_vel_smoothed` -> `cmd_vel`,
+stock Clearpath wiring, nothing bypasses it.
 
-## Step 1 - start park
-    python3 scripts/sim.py start park
-Gate: must end with `READY park default nav`.
+## Step 1 - start park on the stock chain
+Follow `RUN_SIM.md` Part A, stages A1-A6 then A7a (**not** A7b). Do not
+continue past a stage until its gates pass (gotcha #39).
+Gate: every row of the A8 checklist holds. In particular:
+- A5 - `joint_state_broadcaster` and `platform_velocity_controller` both
+  `active`. Nothing on this path recovers the spawner automatically and park
+  loses that race in 42% of runs (gotcha #27); re-run A5's
+  `--switch-timeout 30` spawner by hand until both are active.
+- A6 - `/gui/camera/pose` moved to `a200_0000/robot` and did **not** move for
+  a bogus name. If it did not move, the GUI missed the spawn: stop (Part C)
+  and restart from A1.
+- A7a - `python3 tools/check_nav2_ready.py` prints `READY`, 8 lifecycle nodes
+  active, both action servers, both costmaps OK.
+There is no `READY park default nav` verdict on this path, and
+`scripts/sim.py status` does not apply to it (A9).
 
 ## Step 2 - verify the prior map
     python3 tools/check_map_alignment.py
@@ -30,8 +47,9 @@ error 0.00 deg.
     python3 tools/nav_goal.py X Y [YAW_DEG]           # metric
     python3 tools/nav_goal_ll.py LAT LON              # lat/lon
 Gate: exit code 0. `YAW_DEG` is optional and is not enforced - the goal
-checker is `PositionGoalChecker`, position only. A goal inside a mapped
-obstacle or off the terrain is correctly refused with `NO PATH`.
+checker is `PositionGoalChecker`, position only. A goal off the terrain is
+refused by `in_terrain()` before it is sent (`REFUSED`); a goal inside a
+mapped obstacle is refused by the planner with `NO PATH`.
 
 ## Step 5 - confirm arrival
     gz model -m a200_0000/robot -p | head -3
