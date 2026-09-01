@@ -825,3 +825,26 @@ showed **no** `sensors/*` topics at all, `--no-daemon` showed one, while
 family as gotcha #14. **Never conclude a sensor is missing from a topic
 listing** — confirm with `ros2 topic info -v <topic>` on the specific topic,
 which is the only form that proved reliable.
+
+**39. The Gazebo GUI can finish loading a heavy world's scene while the robot
+spawn message arrives and silently miss it** — physics, topics and `gz model
+-p` are all fine, but nothing is visible in the window. Only park showed
+this (~1 in 3 starts, observed 2026-08-31): it is the heaviest world
+(~97 models, ~221 MB of textures including a 46 MB normal map used 16x);
+warehouse and lake never reproduced it. There is no GUI-side "scene finished
+loading" signal to detect this after the fact — server-side
+`/world/<name>/scene/info` (gotcha #20) reflects the SERVER's scene graph,
+not what the GUI drew, so it can (and did) report the robot present while
+the GUI showed nothing. Detection cannot close this gap, so the fix is
+prevention: `park_sim.launch.py`'s `spawn_delay` argument sequences the
+robot spawn after a fixed launch-time delay via `TimerAction`, giving the
+GUI a head start on loading before the spawn event can arrive mid-load.
+`scripts/sim.py`'s `SPAWN_DELAY_S` sets this per world (15.0 s for park,
+0.0 — a no-op — elsewhere); `phase_controllers`' wait budget is widened by
+the same amount so a delayed-but-healthy spawn is not misdiagnosed as a dead
+controller spawner (gotcha #27). This is launch-time sequencing, not the
+forbidden fixed-sleep-as-readiness-check pattern (see Workflow) — nothing
+polls or waits on a signal, it is a one-shot delay before an action that has
+no readiness signal to poll. `sim.py start`'s renderer gate and whole-cycle
+retry (`RENDERER_FAIL_MARKER`, up to 3 attempts) remain the backstop for
+whatever the delay does not catch.

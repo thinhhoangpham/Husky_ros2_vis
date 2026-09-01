@@ -20,6 +20,7 @@ from launch import LaunchDescription
 from launch.actions import DeclareLaunchArgument
 from launch.actions import IncludeLaunchDescription
 from launch.actions import OpaqueFunction
+from launch.actions import TimerAction
 from launch.launch_description_sources import PythonLaunchDescriptionSource
 from launch.substitutions import EnvironmentVariable, LaunchConfiguration, PathJoinSubstitution
 
@@ -47,6 +48,20 @@ ARGUMENTS = [
     DeclareLaunchArgument('use_sim_time', default_value='true',
                           choices=['true', 'false'],
                           description='use_sim_time'),
+    # Sequences the robot spawn after the GUI has had time to finish loading
+    # its scene, rather than racing it. This is NOT a readiness poll/sleep -
+    # nothing here checks whether loading is done - it is one-shot launch
+    # sequencing: park is heavy enough (~97 models, ~221 MB of textures
+    # including a 46 MB normal map used 16x) that the GUI can still be
+    # building its scene when the robot spawn message arrives, and
+    # gz-sim's GUI silently misses model-creation events that land mid-load
+    # (see CLAUDE.md and .claude/agents/sim-operator.md). Default 0.0 is a
+    # no-op for every world that has not shown this failure; sim.py sets it
+    # to a positive value for park only.
+    DeclareLaunchArgument('spawn_delay', default_value='0.0',
+                          description='Seconds to wait before spawning the '
+                                       'robot, to let a heavy world\'s GUI '
+                                       'finish loading its scene first.'),
 ]
 
 for pose_element in ['x', 'y', 'yaw']:
@@ -113,7 +128,17 @@ def generate_launch_description():
                 ('yaw', resolved['yaw'])]
         )]
 
-    robot_spawn = OpaqueFunction(function=spawn_with_world_pose)
+    # TimerAction, not a readiness poll: it fires once after a fixed launch-time
+    # delay regardless of what the GUI is doing, it does not check or wait for
+    # any signal. It is the accepted mechanism here only because gz-sim
+    # Harmonic 8.11 exposes no GUI-side "scene finished loading" topic or
+    # service to actually wait on (server-side /world/<w>/scene/info reflects
+    # the server's scene graph, not what the GUI drew - see CLAUDE.md gotcha
+    # and the renderer-gate report). A timer is the fallback, not the ideal.
+    robot_spawn = TimerAction(
+        period=LaunchConfiguration('spawn_delay'),
+        actions=[OpaqueFunction(function=spawn_with_world_pose)],
+    )
 
     # Create launch description and add actions
     ld = LaunchDescription(ARGUMENTS)
