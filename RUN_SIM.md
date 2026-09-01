@@ -35,17 +35,6 @@ up to 3 total attempts, whenever phase 4 fails for this reason specifically
 `--z`/gotcha #23). Pass `--no-retry` to disable this and fail on the first
 attempt.
 
-To prevent the race rather than only retry after it, `park_sim.launch.py`
-takes a `spawn_delay` argument that sequences the robot spawn after a fixed
-launch-time delay, so the GUI cannot miss the spawn's creation event mid-load
-(park is the heaviest world — ~97 models, ~221 MB of textures including a
-46 MB normal map used 16x — which is why only park shows this failure).
-`sim.py` sets it automatically per world (`SPAWN_DELAY_S` in `scripts/sim.py`,
-currently 15.0 s for park, 0.0 elsewhere) — this is launch-time sequencing,
-not a readiness poll, since gz-sim exposes no GUI-side "scene finished
-loading" signal to actually wait on; the retry above remains the backstop
-for whatever the delay does not catch.
-
 `--config full` on a world with a nav2 config (park) currently fails phase 6:
 nav2's lifecycle bring-up stalls under `full` (`filter_mask_server`,
 `costmap_filter_info_server`, `controller_server` never activate). This is a

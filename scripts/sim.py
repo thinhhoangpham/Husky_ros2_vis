@@ -384,25 +384,6 @@ def phase_config(shell, config: str) -> PhaseResult:
 
 LAUNCH_DEADLINE = 90.0
 
-# Per-world spawn delay (seconds) passed to park_sim.launch.py's `spawn_delay`
-# argument. Sequences the robot spawn after the world's GUI has had time to
-# load its scene, so gz-sim's GUI cannot miss the spawn's model-creation
-# event mid-load (CLAUDE.md; .claude/agents/sim-operator.md). Only park needs
-# it: it is the heaviest world (~97 models, ~221 MB of textures including a
-# 46 MB normal map used 16x) and the only one observed losing the robot's
-# visual ~1/3 of runs; warehouse and lake are far lighter and load reliably,
-# so leaving them at 0.0 costs them nothing. park itself reaches "stepping"
-# (server ready) at ~6.2-6.3 s; 15.0 s is a conservative multiple of that,
-# chosen because no GUI-side "scene finished loading" signal exists to
-# measure the real completion time against (see park_sim.launch.py) - it is
-# an engineering estimate, not a measured value, and cheap against the 90 s
-# LAUNCH_DEADLINE budget.
-SPAWN_DELAY_S = {"park": 15.0}
-
-
-def spawn_delay_for(world: str) -> float:
-    return SPAWN_DELAY_S.get(world, 0.0)
-
 
 def parse_sim_time(stats_msg: str) -> float | None:
     m = re.search(r"sim_time \{\s*(?:sec: (\d+))?\s*(?:nsec: (\d+))?\s*\}", stats_msg)
@@ -433,9 +414,7 @@ def pose_args(ns) -> str:
 
 
 def phase_launch(shell, world: str, pose: str) -> tuple[PhaseResult, int]:
-    delay = spawn_delay_for(world)
-    cmd = (f"ros2 launch {REPO}/launch/park_sim.launch.py world:={world} "
-           f"spawn_delay:={delay} {pose}").strip()
+    cmd = f"ros2 launch {REPO}/launch/park_sim.launch.py world:={world} {pose}".strip()
     pid = shell.launch(cmd, SIM_LOG)
     t0 = shell.now()
     last = {"t": None}
@@ -479,16 +458,11 @@ def _describe(states: dict[str, str]) -> str:
                      for c in CONTROLLERS if states.get(c) != "active")
 
 
-def phase_controllers(shell, spawn_delay: float = 0.0) -> PhaseResult:
-    # The robot (and so the controller_manager) does not exist until
-    # spawn_delay has elapsed inside the launch, so the "clean" wait budget
-    # has to cover that delay on top of the ordinary spawn/activation time -
-    # otherwise a delayed-but-healthy spawn would be misdiagnosed as needing
-    # the phase-3 recovery spawner.
+def phase_controllers(shell) -> PhaseResult:
     def all_active():
         st = _query_controllers(shell)
         return st if all(st.get(c) == "active" for c in CONTROLLERS) else None
-    st = poll(shell, CLEAN_WAIT + spawn_delay, all_active)
+    st = poll(shell, CLEAN_WAIT, all_active)
     if st:
         return PhaseResult(3, "controllers", "ok", "clean")
     before = _query_controllers(shell)
@@ -734,7 +708,7 @@ def _run_start_attempt(shell, args, out) -> tuple[list[PhaseResult], dict]:
     save_state(STATE_FILE, state)
     if not record(r):
         return results, state
-    if not record(phase_controllers(shell, spawn_delay_for(args.world))):
+    if not record(phase_controllers(shell)):
         return results, state
     if not record(phase_robot(shell, args.world, args.z)):
         return results, state

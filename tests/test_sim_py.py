@@ -257,29 +257,6 @@ def test_phase_launch_ok_when_sim_time_advances():
     assert "world:=park" in sh.launched[0][0] and sh.launched[0][1] == "/tmp/sim.log"
 
 
-from scripts.sim import spawn_delay_for
-
-
-def test_spawn_delay_for_park_only():
-    assert spawn_delay_for("park") == 15.0
-    assert spawn_delay_for("lake") == 0.0
-    assert spawn_delay_for("warehouse") == 0.0
-
-
-def test_phase_launch_passes_spawn_delay_for_park():
-    s1 = STATS; s2 = STATS.replace("sec: 12", "sec: 13")
-    sh = LaunchShell([ "", s1, s1, s2 ])
-    phase_launch(sh, "park", "")
-    assert "spawn_delay:=15.0" in sh.launched[0][0]
-
-
-def test_phase_launch_passes_zero_spawn_delay_for_other_worlds():
-    s1 = STATS; s2 = STATS.replace("sec: 12", "sec: 13")
-    sh = LaunchShell([ "", s1, s1, s2 ])
-    phase_launch(sh, "lake", "")
-    assert "spawn_delay:=0.0" in sh.launched[0][0]
-
-
 def test_phase_launch_fails_when_launch_dies():
     sh = LaunchShell([""], alive=False)
     r, _ = phase_launch(sh, "park", "")
@@ -331,26 +308,6 @@ def test_phase_controllers_recovers_with_switch_timeout_30():
     spawn = [c for c in sh.calls if "spawner" in c][0]
     assert "--switch-timeout 30" in spawn and "joint_state_broadcaster platform_velocity_controller" in spawn
     assert f"--controller-manager {NS}/controller_manager" in spawn
-
-
-def test_phase_controllers_widens_wait_by_spawn_delay():
-    """A controller list that only turns active after CLEAN_WAIT (10 s) but
-    before CLEAN_WAIT + spawn_delay must be accepted as 'clean' - a delayed
-    spawn is not a controller failure and must not trigger the recovery
-    spawner."""
-    class Sh(FakeShell):
-        def run(self, cmd, timeout=30):
-            self.calls.append(cmd)
-            # controllers only appear once enough delayed time has passed
-            if self.t >= 12.0:
-                return LIST_OK
-            return LIST_NONE
-        def pause(self, s):
-            self.t += s
-    sh = Sh()
-    r = phase_controllers(sh, spawn_delay=15.0)
-    assert r.status == "ok" and r.detail.startswith("clean")
-    assert not any("spawner" in c for c in sh.calls)
 
 
 def test_phase_controllers_fails_when_recovery_fails():
@@ -614,7 +571,7 @@ def _patched(monkeypatch, results):
     monkeypatch.setattr(S, "phase_clean", lambda sh: results[0])
     monkeypatch.setattr(S, "phase_config", lambda sh, c: results[1])
     monkeypatch.setattr(S, "phase_launch", lambda sh, w, p: (results[2], 4242))
-    monkeypatch.setattr(S, "phase_controllers", lambda sh, d=0.0: results[3])
+    monkeypatch.setattr(S, "phase_controllers", lambda sh: results[3])
     monkeypatch.setattr(S, "phase_robot", lambda sh, w, z: results[4])
     monkeypatch.setattr(S, "phase_extras", lambda sh, c, lp: (results[5], None))
     monkeypatch.setattr(S, "phase_nav2", lambda sh, w, n: (results[6], 900))
@@ -979,7 +936,7 @@ def _patched_seq(monkeypatch, sequences):
     monkeypatch.setattr(S, "phase_clean", lambda sh: OK7[0])
     monkeypatch.setattr(S, "phase_config", lambda sh, c: OK7[1])
     monkeypatch.setattr(S, "phase_launch", lambda sh, w, p: (OK7[2], 4242))
-    monkeypatch.setattr(S, "phase_controllers", lambda sh, d=0.0: OK7[3])
+    monkeypatch.setattr(S, "phase_controllers", lambda sh: OK7[3])
     calls = {"n": 0}
 
     def robot(sh, w, z):
