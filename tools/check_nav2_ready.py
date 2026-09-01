@@ -29,7 +29,7 @@ import sys
 import time
 
 NS = "/a200_0000"
-# Must match launch/nav_park.launch.py's LIFECYCLE_NODES exactly, in order:
+# Must match launch/park_stock.launch.py's LIFECYCLE_NODES exactly, in order:
 # a single lifecycle_manager_navigation brings all ten up, map nodes
 # first (ruling D4, 2026-08-26 - the former separate lifecycle_manager_maps
 # raced nav2's own manager and stalled with map_server inactive while
@@ -39,7 +39,7 @@ NS = "/a200_0000"
 # defect A).
 # Trimmed 2026-08-27: route_server, smoother_server and docking_server were
 # removed from the launch file as unused.
-LIFECYCLE = ["map_server", "filter_mask_server", "costmap_filter_info_server",
+LIFECYCLE = ["map_server",
              "controller_server", "planner_server", "behavior_server",
              "velocity_smoother", "collision_monitor", "bt_navigator",
              "waypoint_follower"]
@@ -229,6 +229,38 @@ def nav_ready(sh=sh, tf_check=check_transform, lifecycle_check=get_lifecycle_sta
         print(f"  {t.split('/')[-2]:30s}: {'OK' if ok else 'no publisher'}")
         if not ok:
             failures.append(f"{t} has no publisher")
+    return failures
+
+
+def map_topic_published(topic_info: str) -> bool:
+    """Pure check over `ros2 topic info -v` output for a topic with exactly
+    one publisher. Split out of slam_ready so it is unit-testable without
+    ROS, same shape as the other pure gates in this file."""
+    return "Publisher count: 1" in topic_info
+
+
+def slam_ready(sh=sh, tf_check=check_transform) -> list[str]:
+    """Readiness gate for slam_toolbox mapping mode (launch/park_slam.launch.py),
+    used instead of nav_ready(). nav_ready()'s lifecycle-node, action-server
+    and costmap checks all name nav2 nodes (map_server, planner_server, ...)
+    that simply do not exist under slam_toolbox - reusing it as-is would
+    report every one of them "unavailable" forever, not READY.
+
+    slam_toolbox's contract (see park_slam.launch.py's docstring) is: it
+    publishes map -> odom itself, and it serves the live-built map on
+    <ns>/map. Both are checked directly; nothing else in this stack is
+    running in slam mode to check.
+    """
+    failures = []
+    print("== transforms")
+    if not tf_check():
+        failures.append("map -> odom not published (slam_toolbox not up?)")
+    print("== map topic")
+    info = sh(f"ros2 topic info -v {NS}/map 2>/dev/null")
+    ok = map_topic_published(info)
+    print(f"  {NS}/map : {'OK' if ok else 'no publisher'}")
+    if not ok:
+        failures.append(f"{NS}/map has no publisher")
     return failures
 
 

@@ -66,7 +66,7 @@ fi
 # prior map and keepout mask, park's datum). Refuse rather than bring up a
 # stack pointed at the wrong world.
 if [ "$WANT_NAV" = true ] && [ "$WORLD" != "park" ]; then
-  echo "ERROR: the nav2 stack (launch/nav_park.launch.py) is park-only." >&2
+  echo "ERROR: the nav2 stack (launch/park_stock.launch.py) is park-only." >&2
   echo "       Re-run with --no-nav for world '$WORLD'." >&2
   exit 2
 fi
@@ -484,7 +484,7 @@ echo "    model in scene, GUI pid $GUI_PID"
 gate_ok
 
 # ==================================================== PHASE 4 - nav2
-# nav_park.launch.py brings up GPS localization and nav2 under one lifecycle
+# park_stock.launch.py brings up GPS localization and nav2 under one lifecycle
 # manager, now ten nodes (route_server, docking_server and smoother_server
 # were removed 2026-08-27). check_nav2_ready.py is the only accepted gate: a
 # lifecycle 'active' does not mean costmaps hold data or that TF resolves, and
@@ -494,7 +494,8 @@ if [ "$WANT_NAV" = true ]; then
   gate_start "4 - nav2 READY"
   NAV_LOG=/tmp/nav_park.log
   : > "$NAV_LOG"
-  setsid nohup ros2 launch "$REPO/launch/nav_park.launch.py" > "$NAV_LOG" 2>&1 < /dev/null &
+  setsid nohup ros2 launch "$REPO/launch/park_stock.launch.py" \
+    world_and_robot:=false rviz:=false > "$NAV_LOG" 2>&1 < /dev/null &
   disown
   echo "    launched, log: $NAV_LOG"
   await 240 "python3 $REPO/tools/check_nav2_ready.py 2>/dev/null | grep -q READY" \

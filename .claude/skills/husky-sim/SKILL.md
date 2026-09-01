@@ -10,23 +10,41 @@ Four runbooks at `/home/thinhpham/Documents/Husky_viz/` are the procedure:
 | File | Covers |
 |---|---|
 | `CLEAN_SIM.md` | `python3 scripts/sim.py stop` — must print `CLEAN` |
-| `RUN_SIM.md` | `python3 scripts/sim.py start <world> [--config full]` — must print `READY` |
+| `RUN_SIM.md` | Part A park via stock launchers; Part B every other world via `python3 scripts/sim.py start <world> [--config full]` — must print `READY`; Part C stopping |
 | `NAV_PARK.md` | nav2 + GPS localization in park, goals, routes, avoidance |
 | `DEMO.md` | demo scenarios, one self-contained block each |
 
-`CLEAN_SIM.md` and `RUN_SIM.md` are each now a single `scripts/sim.py`
-command rather than a numbered procedure — `start` cleans, launches and
-verifies every gate itself, and `stop` cleans and verifies. Rationale lives
-in `CLAUDE.md`. They are maintained for demos and **they change**. Your
-memory of last session is not evidence of what they say now.
+**`RUN_SIM.md` has two start paths and they are not interchangeable.**
+Read its routing table first and take the path it names for your world.
+
+- **park — Part A, stock Clearpath launchers.** A numbered procedure. It does
+  **not** clean itself (A1 sends you to `CLEAN_SIM.md`), it has no `READY`
+  verdict, and it carries every gate by hand.
+- **every other world — Part B, `python3 scripts/sim.py start <world>`.** One
+  command: it cleans first, launches, and verifies every gate itself, ending
+  in a `READY` verdict line.
+- **stopping — Part C, `python3 scripts/sim.py stop`, both paths.**
+  `CLEAN_SIM.md` is that same command and must print `CLEAN`.
+
+Rationale lives in `CLAUDE.md`. These files are maintained for demos and
+**they change**. Your memory of last session is not evidence of what they say
+now.
 
 ## Three laws
 
 **1. No test begins without proof the machine is clean.**
-Not a belief that it is clean. Not "I killed it a minute ago." A
-`python3 scripts/sim.py start <world>` run ending in the `READY` verdict
-line (it cleans first), or a `stop` run ending in `CLEAN` if no start
-follows.
+Not a belief that it is clean. Not "I killed it a minute ago." The law does
+not bend; only what counts as proof differs by path.
+
+| Path | Proof |
+|---|---|
+| Part B (`sim.py`) | a `start <world>` run ending in the `READY` verdict line (it cleans first) |
+| Part A (park) | `CLEAN_SIM.md` run in full ending in `CLEAN`, **then** every one of Part A's hand-run gates passing |
+| no start follows | a `stop` run ending in `CLEAN` |
+
+On Part A there is no verdict line to hide behind. Quote each gate's actual
+value against the runbook's required one; an unrun gate is an unclean
+machine.
 
 **2. Every command in a test comes from a runbook, verbatim.**
 Not an equivalent you composed. If the sequence you need isn't in a runbook, that
@@ -45,9 +63,22 @@ Every sim operation is one pass through this. There is no entry point in the
 middle.
 
 ```
-sim.py start  →  [NAV_PARK.md]  →  [the test]
-  READY            verify          measure
+park:   CLEAN_SIM.md  →  RUN_SIM.md Part A  →  [the test]
+          CLEAN            hand-run gates       measure
+
+others: sim.py start  →  [NAV_PARK.md]  →  [the test]
+          READY            verify          measure
 ```
+
+**On park, `NAV_PARK.md` is not a step in this chain — it is a different
+chain.** Part A runs `clearpath_nav2_demos slam.launch.py`, so slam_toolbox
+owns `map -> odom`. `NAV_PARK.md` brings up nav2 + GPS localization with its
+own `map_server`, `navsat_transform` and `ekf_node_map`. Layering them puts
+two producers on `map -> odom`, which fails silently in the family of
+gotcha #34 — nothing errors, goals are simply ignored or the pose fights
+itself. The two stacks are **alternatives**. If a task needs nav2 on park,
+stop and ask which stack is wanted; do not layer them and do not pick one
+yourself.
 
 ### Phase 0 — before anything
 
@@ -58,25 +89,34 @@ so a missing step is visible before it costs anything.
 
 ### Phase 1 — clean, launch and verify
 
-Run `python3 scripts/sim.py start <world> [--config full]` (see `RUN_SIM.md`;
-`CLEAN_SIM.md` is folded into this — it cleans before doing anything else, so
-no separate pass is needed). Relay every phase line it prints and the final
-verdict line verbatim. Every phase it checks is a gate, including the ones
-that look redundant — several exist precisely because an earlier hand-run
-procedure passed while the sim was broken:
+Take the path `RUN_SIM.md` routes your world to. Do not mix them.
 
-- The `controllers` phase exists because `imu_0/data` publishes straight from
-  the Gazebo sensor and is structurally blind to a dead controller spawner. A
-  sim used to pass every gate with `platform_velocity_controller` absent —
-  `sim.py` queries `list_controllers` directly and recovers with
-  `--switch-timeout 30` if needed (CLAUDE.md gotcha #27).
-- If it prints `FAIL <n> <phase>: <observation>`, report that line plus the
-  last ~30 lines of the log it names (`/tmp/sim.log`, `/tmp/bridge.log`, or
-  `/tmp/nav.log`). Do not re-run and do not investigate — that is the finding.
+**park — Part A.** Run `CLEAN_SIM.md` in full first; required last line
+`CLEAN`. Then execute Part A's numbered steps verbatim and report each one.
+Two of them are load-bearing and have no automation behind them:
 
-Gate: the verdict line reads `READY ...`. Do not proceed to a test until it
-does. To stop without starting another sim, run
-`python3 scripts/sim.py stop` — required last line `CLEAN`.
+- **A4, controllers.** park loses the spawner race in 18 of 43 runs, 42%
+  (CLAUDE.md gotcha #27), and **nothing on this path recovers automatically** —
+  you run the `--switch-timeout 30` spawner by hand and re-check. `imu_0/data`
+  publishes straight from the Gazebo sensor and is structurally blind to a dead
+  spawner, so no other gate catches this.
+- **A5, verification.** Every gate in its checklist is run and quoted by you.
+  There is no verdict line. `sim.py status` is invalid here (A6) — do not
+  substitute it.
+
+**every other world — Part B.** Run
+`python3 scripts/sim.py start <world> [--config full]`; it cleans first, so no
+separate `CLEAN_SIM.md` pass is needed. Relay every phase line and the final
+verdict verbatim. Its `controllers` phase queries `list_controllers` directly
+and recovers with `--switch-timeout 30` — that recovery exists only on this
+path. If it prints `FAIL <n> <phase>: <observation>`, report that line plus the
+last ~30 lines of the log it names (`/tmp/sim.log`, `/tmp/bridge.log`, or
+`/tmp/nav.log`). Do not re-run and do not investigate — that is the finding.
+
+Gate: `READY ...` on Part B, or every Part A checklist row holding on park. Do
+not proceed to a test until it does. To stop without starting another sim, run
+`python3 scripts/sim.py stop` (Part C, both paths) — required last line
+`CLEAN`.
 
 ### Phase 2 — the test
 
@@ -89,7 +129,8 @@ add the block to `DEMO.md` first. A test that exists only in a chat message
 cannot be reproduced by whoever opens the file next, and its result is worth
 correspondingly less.
 
-**Between two tests, return to Phase 1.** (re-run `sim.py start`) A second test on a world that already
+**Between two tests, return to Phase 1** — on Part B re-run `sim.py start`; on
+park re-run the whole Part A sequence, `CLEAN_SIM.md` included. A second test on a world that already
 has a spawned object, a robot 20 m off its spawn pose, or an aborted goal in its
 history is not the same test. State-dependent results are how a passing number
 gets attached to a broken system.

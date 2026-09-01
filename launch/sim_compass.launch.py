@@ -55,7 +55,7 @@ def generate_launch_description():
     # Local copy of clearpath_gz's gz_sim.launch.py: it is the only place
     # GZ_SIM_RESOURCE_PATH can be extended, because clearpath_gz's version
     # overwrites that variable rather than appending to it. Needed so
-    # worlds/park.sdf can resolve its model:// meshes out of ../models.
+    # worlds/park.sdf can resolve its model:// meshes out of ../gz/share.
     gz_sim_launch = '/home/thinhpham/Documents/Husky_viz/launch/gz_sim.launch.py'
     robot_spawn_launch = PathJoinSubstitution(
         [pkg_clearpath_gz, 'launch', 'robot_spawn.launch.py'])

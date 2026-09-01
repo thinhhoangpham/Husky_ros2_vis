@@ -26,7 +26,7 @@ PATTERNS=(
   "urg_node"
   "velodyne"
   "rviz2"
-  # nav2 + GPS localization stack (launch/nav_park.launch.py) - see CLAUDE.md #21
+  # nav2 + GPS localization stack (launch/park_stock.launch.py) - see CLAUDE.md #21
   "navsat_transform_node"
   "ekf_node_map"
   "controller_server"

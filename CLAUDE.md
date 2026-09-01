@@ -16,18 +16,20 @@ Husky_viz/
   launch/              custom launch files
   scripts/             executable entry points
   tools/               rclpy verification scripts (check_*.py)
+  gz/share/            model meshes/textures — also an ament prefix (gotcha #6)
 ```
 
 | Adding... | Put it in | Notes |
 |---|---|---|
 | a robot config | `robot_configs/robot_<name>.yaml` | apply with `scripts/apply_config.sh <name>` |
 | a world | `worlds/*.sdf` | world-level Gazebo systems live here |
+| a model mesh/texture | `gz/share/<model>/` | **not `models/`** — the dir is shaped as an ament prefix (`<prefix>/share`) so stock `gz_sim.launch.py` finds it via `AMENT_PREFIX_PATH`. Do not rename it back (gotcha #6) |
 | a custom sensor xacro | `urdf/` | then reference it from `urdf/extras.urdf.xacro` |
 | a launch file | `launch/` | |
 | a shell entry point | `scripts/` | `chmod +x` |
 | a check/verification script | `tools/check_<what>.py` | name it after what it proves |
 | a nav2 / localization config | `config/` | not `robot_configs/`, which is Clearpath robot descriptions |
-| a generated map or mask | `maps/` | regenerate with `tools/generate_park_maps.py` |
+| a generated map | `maps/` | regenerate with `tools/generate_park_maps.py` |
 | a waypoint route | `routes/` | lat/lon valid only against the world's datum |
 | generated URDF/params/launch | nowhere — they land in `~/clearpath/` | **never edit or commit these** |
 
@@ -79,16 +81,24 @@ All four are covered by the single `husky-sim` skill
 (`.claude/skills/husky-sim/`). The two per-runbook skills that preceded it
 were removed on 2026-08-27 — do not reference them.
 
-`scripts/sim.py start|stop|status` is the single entry point (2026-08-28);
-`CLEAN_SIM.md` and `RUN_SIM.md` now wrap it. This section covers the
-surrounding context; the runbooks cover the doing.
+`scripts/sim.py start|stop|status` was the single entry point (2026-08-28).
+**Since 2026-09-01 park is started with the stock Clearpath launchers
+instead** (gotcha #6), so `sim.py start` covers `lake`, `warehouse_ext`,
+`warehouse_ramp` and the six stock worlds; `RUN_SIM.md` Part A carries
+park's stock chain and Part B wraps `sim.py`. `sim.py stop` remains the
+cleanup for everything, park included, and `CLEAN_SIM.md` still wraps it.
+This section covers the surrounding context; the runbooks cover the doing.
 
 `sim.py start` cleans, applies the config, launches, verifies controllers
 and the robot, bridges compass/radio, and brings up nav2 — every gate
 `RUN_SIM.md` used to carry by hand is back, now enforced by the command
-itself rather than by a human following steps. If a task needs something
-beyond its gates, confirm it with `ros2 topic info -v` on specific topics
-rather than a topic listing (gotcha #38).
+itself rather than by a human following steps. **None of that applies to
+park's stock chain**: it does not clean, has no controller-spawner recovery,
+has no automatic spawn pose and produces no READY verdict, so `RUN_SIM.md`
+Part A carries those gates by hand — and `sim.py status`, which reads the
+state file only `sim.py start` writes, is not usable against it. If a task
+needs something beyond these gates, confirm it with `ros2 topic info -v` on
+specific topics rather than a topic listing (gotcha #38).
 
 **Never run sim commands from the main conversation. Route every sim
 operation — start, stop, restart, verify, demo — to the `sim-operator` agent**
@@ -196,10 +206,12 @@ if you add a sensor to `default`, add it to `full` too or the superset claim
 quietly stops being true.
 
 **`scripts/sim.py start park --config full` currently fails phase 6.** nav2's
-lifecycle bring-up stalls under `full` (`filter_mask_server`,
-`costmap_filter_info_server`, `controller_server` never activate) — a known
-open nav2 bring-up issue, not a `sim.py` regression. `default` is the
-verified path for park.
+lifecycle bring-up stalls under `full` (`controller_server` never activates)
+— a known open nav2 bring-up issue, not a `sim.py` regression. `default` is
+the verified path for park. Two of the three nodes originally implicated
+(`filter_mask_server`, `costmap_filter_info_server`) were **removed** on
+2026-08-31 with the keepout mask (gotcha #30), not fixed — so the stall's
+remaining scope is untested.
 
 ## Ported worlds — `park`, `lake`
 
@@ -229,8 +241,13 @@ stock Clearpath worlds also lack them, and `warehouse_ext` / `warehouse_ramp`
 have them — note `warehouse_ramp` contains only a `ground_plane`, so lake is
 the first surface in this project with real slopes.
 
-Meshes live in `models/` — real copies, never symlinks (a dead symlink into
-`/home/thinh/...` broke the first attempt). Visual and collision geometry point
+Meshes live in `gz/share/` — real copies, never symlinks (a dead symlink into
+`/home/thinh/...` broke the first attempt; symlinks also do not survive a backup
+to another drive). The directory is named `gz/share/` rather than `models/`
+because stock `clearpath_gz/launch/gz_sim.launch.py` appends `<prefix>/share`
+for every `AMENT_PREFIX_PATH` entry, so `Husky_viz/gz` is an ament prefix and
+the models are found with no fork (gotcha #6). It is gitignored, as `models/`
+was. Visual and collision geometry point
 at `_lowpoly` variants that already shipped with the assets: park went 161.6 MB
 → 27.4 MB of referenced mesh data and 83 s → 4 s load. "Low-poly" here still
 means ~40k triangles; lake carries 3.8 M collision triangles total (64 bushes
@@ -328,10 +345,99 @@ real local field for the world's lat/lon), so heading works; divide by `1e4`
 before trusting `|B|`. Verified: 0.24 T with spherical coords, correct
 4.849e-05 T without.
 
-**6. `simulation.launch.py` hard-restricts `world` to six names**, and its
-`gz_sim.launch.py` rebuilds `GZ_SIM_RESOURCE_PATH` from scratch, discarding
-whatever you exported. Both must be worked around to load a custom world, so
-`launch/park_sim.launch.py` and `launch/gz_sim.launch.py` are copies of the
+**6. The six-world whitelist lives ONLY in the `simulation.launch.py`
+wrapper — the two sub-launchers it includes do not restrict `world` at all.**
+Re-read 2026-09-01: `simulation.launch.py` adds no nodes of its own, it just
+includes `gz_sim.launch.py` and `robot_spawn.launch.py`, and **neither
+declares `choices` on `world`**. So the whitelist is avoidable with stock
+files by calling the two sub-launchers directly.
+
+`gz_sim.launch.py` still rebuilds `GZ_SIM_RESOURCE_PATH` from scratch
+(lines 110-117) from `clearpath_gz/worlds`, `clearpath_gz/meshes`, and
+`os.path.join(p, 'share')` for every `AMENT_PREFIX_PATH` entry — an inherited
+`GZ_SIM_RESOURCE_PATH` is discarded, so **injecting an `AMENT_PREFIX_PATH`
+prefix is the only hook.** That is why the models directory is
+`gz/share/` and not `models/`: `Husky_viz/gz` is an ament prefix whose
+`share` the stock launcher appends by itself.
+
+**Stock-file launch path — runtime-verified 2026-09-01** by launching the
+full chain on park. **Run the world, the robot and the navigation stack as
+three separate commands, in that order, gating between them — see gotcha
+#39; a single launch file doing all three renders an empty park.** The SLAM
+tail below and the nav2 + GPS stack are *alternatives*, not steps (both
+publish `map -> odom`); `RUN_SIM.md` A7 states the choice.
+
+```bash
+export AMENT_PREFIX_PATH=/home/thinhpham/Documents/Husky_viz/gz:$AMENT_PREFIX_PATH
+ros2 launch clearpath_gz gz_sim.launch.py \
+    world:=/home/thinhpham/Documents/Husky_viz/worlds/park
+ros2 launch clearpath_gz robot_spawn.launch.py world:=park \
+    x:=45.64 y:=0.02 z:=3.3 yaw:=2.6132
+ros2 launch clearpath_nav2_demos slam.launch.py use_sim_time:=true setup_path:=$HOME/clearpath/
+ros2 launch clearpath_viz view_navigation.launch.py namespace:=a200_0000 use_sim_time:=true
+```
+
+Evidence from that run:
+
+- **Meshes resolved:** `0` occurrences of `Error Code 14`, `Error Code 9` or
+  `Failed to load a world` in the gz log — the `models/` → `gz/share/` rename
+  did not break `model://` resolution, which was the gotcha #17 risk.
+- **The `AMENT_PREFIX_PATH` → `<prefix>/share` mechanism works with no fork
+  involved:** `GZ_SIM_RESOURCE_PATH` read back from the live server's
+  `/proc/<pid>/environ` held exactly three entries — `clearpath_gz/worlds`,
+  `clearpath_gz/meshes`, and `/home/thinhpham/Documents/Husky_viz/gz/share`.
+- **World stepping:** `/world/park/stats` → `iterations: 1804`,
+  `real_time_factor: 0.9999`.
+- **Spawn correct:** robot settled at `[45.640, 0.0206, 3.1196]`, yaw
+  `2.6132` — the documented park settle pose, i.e. `z:=3.3` was right and it
+  did not fall through the terrain.
+- **Stack live:** both controllers `active`; `Publisher count: 1` on
+  `platform/odom`, `sensors/imu_0/data`, `sensors/lidar2d_0/scan`,
+  `sensors/gps_0/fix`; `/a200_0000/map` `Publisher count: 1` with `map -> odom`
+  present on `/a200_0000/tf`.
+
+Mechanical note: the four launches were run detached, so shell state does not
+persist between them — each needs its own `bash -c` carrying
+`source /opt/ros/jazzy/setup.bash` alongside the `export` and the `ros2 launch`.
+
+**Stock `slam.launch.py` already does the `/tf` remap.** The installed
+`clearpath_nav2_demos/launch/slam.launch.py` carries
+`SetRemap('/tf', '/<namespace>/tf')` and the `/tf_static` equivalent inside a
+`PushRosNamespace(namespace)` group, so slam_toolbox's `map -> odom` lands on
+the namespaced topic the stack actually reads (the silent-failure family of
+gotcha #34). That concern is **not** a reason to avoid the stock SLAM launcher;
+`launch/park_slam.launch.py`'s docstring explains the failure mode.
+
+**No controller recovery on this path.** Gotcha #27 measures park losing the
+controller-spawner race in **18 of 43 runs (42%)**, 11 of them ending with no
+controllers active. `scripts/sim.py` phase 3 re-runs the spawner with
+`--switch-timeout 30`; the stock chain has **no equivalent**, so a lost race is
+silent and permanent. The 2026-09-01 run happened to get a clean spawn — one
+sample, not evidence the race is absent. Check `list_controllers` yourself and
+run gotcha #27's `--switch-timeout 30` recovery spawner by hand whenever either
+controller is inactive.
+
+The two launchers take `world` in *different forms*, and that is not a typo.
+`gz_sim.launch.py` uses `world` at exactly one place — line 90, building
+`gz_args` as `<world> + '.sdf'` — so an **absolute path** works, and it must be
+given **without** the `.sdf` extension or you get `park.sdf.sdf`. Because that
+path is absolute, `Husky_viz/worlds` does **not** need to be on
+`GZ_SIM_RESOURCE_PATH` here; only `gz/share` has to resolve. (The fork prepends
+both because its `gz_args` is a bare name — see the deviation table below.)
+`robot_spawn.launch.py` uses `world` to build `/world/<world>/model/...` topic
+prefixes (lines 102, 108), so it needs the **bare name** `park`, matching
+`park.sdf`'s `<world name='park'>`.
+
+**`gz/share/` is now the single models location feeding BOTH consumers** —
+the fork's `GZ_SIM_RESOURCE_PATH` and the stock `AMENT_PREFIX_PATH` route.
+`run_husky_sim.sh`'s "keep the two in sync" note is therefore a **three-way**
+constraint: `launch/gz_sim.launch.py:116`, `scripts/run_husky_sim.sh:83`, and
+the `AMENT_PREFIX_PATH` export above. Do **not** "restore" `models/` without
+updating all three — an unresolvable `model://` URI aborts the entire world
+load (gotcha #17), so this fails loudly but confusingly.
+
+**The fork is not removed and is still what `scripts/sim.py` uses.**
+`launch/park_sim.launch.py` and `launch/gz_sim.launch.py` remain copies of the
 stock files carrying the minimum deviation:
 
 | File | Deviation from stock |
@@ -339,12 +445,16 @@ stock files carrying the minimum deviation:
 | `park_sim.launch.py` | `park` and `lake` added to the `world` choices list |
 | `park_sim.launch.py` | `gz_sim_launch` points at the local `gz_sim.launch.py` |
 | `park_sim.launch.py` | `robot_spawn` wrapped in an `OpaqueFunction` applying per-world spawn poses (gotcha #23) |
-| `gz_sim.launch.py` | `Husky_viz/worlds` and `Husky_viz/models` prepended to `GZ_SIM_RESOURCE_PATH` |
+| `gz_sim.launch.py` | `Husky_viz/worlds` and `Husky_viz/gz/share` prepended to `GZ_SIM_RESOURCE_PATH` |
 
 `gz_args` is built as `<world>.sdf` — a bare name resolved through that
 resource path — which is why `worlds/` has to be on it too, not just
-`models/`. Launch with
+`gz/share/`. Launch with
 `ros2 launch launch/park_sim.launch.py world:=<park|lake|warehouse|...>`.
+
+**The fork's remaining advantage over the stock path is `WORLD_SPAWN_POSES`.**
+On the stock path the spawn pose must be passed by hand every time, and
+omitting `z:=3.3` drops the robot under park's terrain (gotcha #23).
 
 **7. Custom sensors are never auto-bridged — unless you declare a stock model
 with `urdf_enabled: false`.** Clearpath's generator only bridges sensors
@@ -481,10 +591,13 @@ Convert to `<pbr>` — **and include `<diffuse>1 1 1 1</diffuse>`**. SDF default
 base colour to (0,0,0) and ogre2 multiplies the albedo map by it, so a `<pbr>`
 block without `<diffuse>` renders pure black regardless of the texture.
 
-**20. Diagnose rendering problems by querying the live renderer, not by diffing
+**20. Diagnose material problems by querying the live scene, not by diffing
 world files.** `gz service -s /world/<name>/scene/info --reqtype gz.msgs.Empty
 --reptype gz.msgs.Scene --timeout 30000 --req ''` dumps the material as the
-renderer holds it. Protobuf omits zero fields, so `diffuse { a: 1 }` means
+scene graph holds it. **That service is served by the server's
+`SceneBroadcaster`, not by the GUI**, so it settles material questions but is
+*not* evidence that the GUI has rendered anything — see gotcha #39.
+Protobuf omits zero fields, so `diffuse { a: 1 }` means
 r=g=b=0. Two wrong diagnoses (texture size, shadow setting) preceded one query
 that settled it.
 
@@ -619,10 +732,22 @@ all man-made objects are mapped.
 are invisible to lidar and to physics, and the robot drives straight through
 them. True of the original ROS 1 world too.
 
-**30. The keepout mask is the only thing stopping nav2 planning off the
-terrain.** A lidar ray past the edge returns max range, which the costmap
-reads as free space and actively *clears*. The void cannot be sensed (see
-gotcha #25 — neither ported world has a ground plane).
+**30. The terrain edge is unsensable, and since 2026-08-31 nothing in the
+costmap asserts it.** A lidar ray past the edge returns max range, which the
+costmap reads as free space and actively *clears*. The void cannot be sensed
+(see gotcha #25 — neither ported world has a ground plane).
+
+The keepout mask that used to assert the boundary (`maps/park_keepout.*`,
+`filter_mask_server`, `costmap_filter_info_server`, both costmaps'
+`keepout_filter`) was **removed by decision on 2026-08-31**: stock Clearpath
+ships no costmap-filter infrastructure at all; `tools/nav_goal.py:24`'s
+`in_terrain()` already rejects any goal outside the terrain with a 1.0 m
+margin; `routes/park_route_1.yaml`'s nearest approach to an edge is 11.7 m;
+and it deleted two of the three lifecycle nodes implicated in the park+`full`
+phase-6 stall. **Residual exposure, knowingly accepted:** park spawns at
+x=45.64, only 4.36 m from the +x edge at x=50, and `behavior_server` has
+`spin`/`backup`/`drive_on_heading` enabled (`nav2_park.yaml:289`) — those move
+the robot without a goal, so the goal-side guard does not cover them.
 
 **Raised on 2026-08-27:** both scan sources in `config/nav2_park.yaml` (the
 global `obstacle_layer` and the local `voxel_layer`) went from the stock
@@ -634,9 +759,8 @@ needed because the global costmap is `rolling_window: false` and fixed in
 cell was unclearable once the robot moved 3 m away, and a box 6.0 m dead ahead
 in clear line of sight produced 0 lethal cells, marking only at 2.15 m.
 The side effect is exactly this gotcha: clearing over the void beyond the
-terrain edge is now far more aggressive than at 3.0 m. `keepout_filter` is a
-separate costmap filter and should still keep the planner on the terrain —
-that assumption is now the thing to watch.
+terrain edge is now far more aggressive than at 3.0 m, with no costmap filter
+behind it any more — that is the thing to watch.
 
 **31. Nav2 costmap filter and static-layer topics must be absolute.**
 Relative names resolve inside the costmap node
@@ -654,8 +778,8 @@ Gazebo world frame **is** the ENU frame: **+x East, +y North**, verified live
 Clearpath world declares, and it is why the ENU→map rotation relay was deleted
 and `navsat_transform`'s `yaw_offset` is `0.0`.
 
-World x/y are unaffected by any of this, and so are `maps/*.pgm`, the keepout
-mask and the spawn poses. Only literal lat/lon goes stale — regenerate it from
+World x/y are unaffected by any of this, and so are `maps/*.pgm` and the
+spawn poses. Only literal lat/lon goes stale — regenerate it from
 world x/y through `navsat_transform`'s `toLL` service rather than by hand.
 `tools/nav_goal_ll.py` converts through `fromLL` and so self-updates; it also
 refuses a converted point outside the terrain (`nav_goal.py:25`), which is the
@@ -825,3 +949,77 @@ showed **no** `sensors/*` topics at all, `--no-daemon` showed one, while
 family as gotcha #14. **Never conclude a sensor is missing from a topic
 listing** — confirm with `ros2 topic info -v <topic>` on the specific topic,
 which is the only form that proved reliable.
+
+**39. On the stock park chain the world, the robot and the navigation stack
+must be three separate commands — one launch file doing all three renders an
+empty park.** `launch/park_stock.launch.py` can start the world and robot
+itself (`world_and_robot`, default `true`, line 630) and **that path is
+unreliable**: the robot spawns correctly in the physics server — it is in
+`gz model`, its controllers activate, its topics publish — while the **GUI
+never adds it to its rendering scene**. It is absent from the entity tree,
+`/gui/move_to` does not move the camera to it, and the user sees an empty
+park. Verified failing twice on 2026-09-01.
+
+Mechanism: the GUI subscribes to the scene once at startup and then loads
+park's meshes. Stock `robot_spawn.launch.py`'s `ros_gz_sim create` fires as
+soon as the *server* answers `/world/park/create`, which happens while the GUI
+is still loading, so the creation event is missed and the GUI's scene stays
+stale for the whole run. Running the stages as separate commands fixes it
+because the world is fully stepping and rendered before the spawn command is
+issued at all.
+
+A `gui_ready_gate` polling `/gui/copy` (`park_stock.launch.py:336-339,591`)
+was added to close this and **was not sufficient** — `/gui/copy` proves the
+GUI's *plugins* loaded, not that its render scene is built. Two earlier
+attempts are in git history and were both reverted: `Sequence park's robot
+spawn after a launch-time delay to prevent GUI miss` (0319914, reverted
+a82d906) and `Add renderer gate to sim.py phase 4 and auto-retry on GUI-miss`
+(09599e5, reverted c52b316).
+
+**`/world/<name>/scene/info` is not a renderer check.** The second reverted
+commit gated on it; it is served by `SceneBroadcaster` **in the server**, so
+it reports the robot present in exactly the runs where the GUI missed it. It
+is a positive result that cannot distinguish the failure — the mistake cost
+real time on 2026-09-01. `/gui/screenshot` is no better: it returns
+`data: true` and writes no file, and `/gui/move_to`'s boolean is `data: true`
+for a nonexistent entity name too (gotcha #4 family).
+
+**What does prove GUI presence:** gz-gui's MoveTo plugin resolves its target
+through the GUI process's own rendering scene (`scene->VisualByName`) and does
+nothing when the name is absent. So call `/gui/move_to` with
+`a200_0000/robot`, then read `/gui/camera/pose` — if the camera relocated near
+the robot's pose, the GUI holds the visual. Use a bogus entity name as a
+negative control. Verified 2026-09-01: camera moved to
+`(44.182, 0.066, 3.470)`, 1.46 m from the robot; the bogus call did not move
+it. `RUN_SIM.md` A3–A8 carry this sequence and its gates verbatim.
+
+Note that separating the stages buys nothing for gotcha #27 — there is still
+no automatic controller recovery on this path, and park's 42% spawner-race
+failure applies unchanged.
+
+**40. `navsat_transform_node` converts its first GPS fix against an un-`Reset`
+origin, and the resulting ~4.9 million metre outlier is fused.**
+`config/gps_localization.yaml:166` sets `odom1_pose_rejection_threshold:
+1000.0` to reject it; the full derivation is inline in that file
+(lines ~140-165) and is the authority. In short: `LocalCartesian`'s origin is
+`Reset()` to the datum only after an `odometry/filtered` message arrives, but
+`gpsFixCallback` converts every fix unconditionally and `delay: 3.0` sleeps
+inside the constructor *after* the subscriptions are created, so a queued fix
+is converted against the un-`Reset` `(0,0,0)` origin. That produced a first
+`odometry/gps` of `(636893.98, 4855650.27)`, which the EKF fused and then
+spent ~11 s ringing down from — permanently smearing the global costmap
+(gotcha #30: `rolling_window: false`, so raytrace clearing is the only removal
+mechanism).
+
+| | before | after |
+|---|---|---|
+| largest `map -> odom` step | 4,897,662 m | 45.640433 m (the one legitimate jump) |
+| samples > 1000 m from origin | yes | none |
+| settle | t+29.8 s after ~11 s oscillation | t+18.7 s, no oscillation |
+| settled stdev x / y | 0.9 mm / 6.7 mm | 1.8e-07 m / 1.2e-07 m |
+
+The threshold is `1000.0`, not a conventional 5 or 10, because `odometry/gps`
+publishes an all-zero pose covariance so `R` floors to `1e-9`, leaving `P`
+alone in the Mahalanobis denominator. The outlier is ~1.1e7 sigmas, but the
+*legitimate* first jump from map origin to spawn is ~101 sigmas — a threshold
+of 10 would reject that too and wedge the filter at `(0,0)` for ~416 s.

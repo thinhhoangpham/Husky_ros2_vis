@@ -3,14 +3,13 @@
 Steps only. If a step fails, fix the file rather than working around it.
 Step 1 cleans automatically — no separate `CLEAN_SIM.md` pass is needed.
 
-The stack: `launch/nav_park.launch.py` brings up GPS localization and nav2
+The stack: `launch/park_stock.launch.py` brings up GPS localization and nav2
 under one lifecycle manager (`lifecycle_manager_navigation`), which owns the
-map server, the keepout filter mask server, the costmap filter info server and
-every nav2 node. Global position in `map` comes from GPS only, heading from
-the ENU-referenced IMU, and wheel odometry is fused as velocity only, never
-position (`config/gps_localization.yaml`). The keepout mask is what stops the
-planner routing off the terrain edge. `collision_monitor` is in the command
-path: `cmd_vel_smoothed` -> `cmd_vel`, stock Clearpath wiring, nothing
+map server and every nav2 node. Global position in `map` comes from GPS only,
+heading from the ENU-referenced IMU, and wheel odometry is fused as velocity
+only, never position (`config/gps_localization.yaml`). Goals are kept on the
+terrain by `tools/nav_goal.py`, not by a costmap filter. `collision_monitor`
+is in the command path: `cmd_vel_smoothed` -> `cmd_vel`, stock Clearpath wiring, nothing
 bypasses it.
 
 ## Step 1 - start park

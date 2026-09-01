@@ -300,6 +300,12 @@ class Shell:
         with contextlib.redirect_stdout(io.StringIO()):     # its per-check prints are noise here
             return nav_ready(lambda cmd, timeout=None: self.run(cmd, timeout=timeout or 30))
 
+    def slam_ready(self) -> list[str]:
+        sys.path.append(REPO)
+        from tools.check_nav2_ready import slam_ready
+        with contextlib.redirect_stdout(io.StringIO()):     # its per-check prints are noise here
+            return slam_ready(lambda cmd, timeout=None: self.run(cmd, timeout=timeout or 30))
+
 
 def poll(shell, deadline_s: float, probe, interval: float = 0.5):
     """Call `probe()` until it returns truthy or the deadline passes.
@@ -568,13 +574,21 @@ def nav_config(world: str):
     return p if os.path.exists(p) else None
 
 
-def phase_nav2(shell, world: str, no_nav: bool):
+def phase_nav2(shell, world: str, no_nav: bool, localization: str = "gps"):
     cfg = nav_config(world)
     if cfg is None:
         return PhaseResult(6, "nav2", "skip", f"no config/nav2_{world}.yaml"), None
     if no_nav:
         return PhaseResult(6, "nav2", "skip", "--no-nav"), None
-    pid = shell.launch(f"ros2 launch {REPO}/launch/nav_park.launch.py", NAV_LOG)
+    # world_and_robot:=false is the seam: launch/park_stock.launch.py owns the
+    # navigation stages (Stage 1 localization, Stage 2 map_server, Stage 3
+    # nav2 under one lifecycle manager), and that argument skips its stock
+    # world/robot includes - phases 2-5 above have already brought those up,
+    # and including them again would start a second Gazebo. rviz is off here
+    # because sim.py has never started one.
+    pid = shell.launch(f"ros2 launch {REPO}/launch/park_stock.launch.py "
+                       f"world_and_robot:=false rviz:=false "
+                       f"localization:={localization}", NAV_LOG)
     last = {"f": ["not checked"]}
 
     rtf = parse_rtf(shell.world_stats(world))
@@ -599,7 +613,52 @@ def phase_nav2(shell, world: str, no_nav: bool):
     return PhaseResult(6, "nav2", "ok", "map->odom present, all lifecycle nodes active"), pid
 
 
+SLAM_LOG = "/tmp/slam.log"
+
+
+def phase_slam(shell, world: str):
+    """slam_toolbox mapping mode: launch/park_slam.launch.py replaces BOTH
+    the Stage 1 localization backend and the Stage 2 map_server (see that
+    file's docstring), so this phase is reported as "slam" rather than
+    "nav2" and gated with shell.slam_ready() instead of shell.nav_ready() -
+    nav_ready()'s lifecycle-node/action-server/costmap checks all name nav2
+    nodes that do not exist under slam_toolbox (see
+    tools/check_nav2_ready.py's slam_ready() docstring).
+    """
+    pid = shell.launch(f"ros2 launch {REPO}/launch/park_slam.launch.py", SLAM_LOG)
+    last = {"f": ["not checked"]}
+
+    rtf = parse_rtf(shell.world_stats(world))
+    deadline = nav_deadline(rtf)
+    rtf_note = (f"rtf {rtf:.2f}, budget scaled from {NAV_DEADLINE:.0f} s"
+                if rtf is not None else
+                f"rtf unreadable, budget not scaled from {NAV_DEADLINE:.0f} s")
+
+    def probe():
+        if not shell.pid_alive(pid):
+            return "dead"
+        last["f"] = shell.slam_ready()
+        return "ready" if not last["f"] else None
+
+    v = poll(shell, deadline, probe, interval=2.0)
+    if v == "dead":
+        return PhaseResult(6, "slam", "fail", f"slam launch (pid {pid}) died - see {SLAM_LOG}"), pid
+    if v != "ready":
+        return PhaseResult(6, "slam", "fail",
+                           f"not ready after {deadline:.0f} s ({rtf_note}): "
+                           f"{'; '.join(last['f'][:3])} - see {SLAM_LOG}"), pid
+    return PhaseResult(6, "slam", "ok", "map->odom present, /a200_0000/map publishing"), pid
+
+
 # ----------------------------------------------------------------------- CLI
+# CLI-level superset of launch/park_stock.launch.py's LOCALIZATION_BACKENDS.
+# "amcl" is accepted here ahead of that launch file supporting it (a later,
+# separate task) so the CLI surface does not have to change again when it
+# lands - passing --localization amcl today fails downstream in nav2, not
+# with an "unknown choice" from argparse.
+LOCALIZATION_CHOICES = ["gps", "rssi", "amcl"]
+
+
 def parse_args(argv: list[str]) -> argparse.Namespace:
     p = argparse.ArgumentParser(prog="sim.py")
     sub = p.add_subparsers(dest="cmd", required=True)
@@ -608,11 +667,30 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     s.add_argument("--config", default="default")
     s.add_argument("--no-nav", action="store_true")
     s.add_argument("--clean-on-fail", action="store_true")
+    # default=None (not "gps") so "was --localization given at all" can be
+    # told apart from "user asked for the default backend" - needed to
+    # detect --slam combined with an explicit --localization below, since
+    # --slam's own default backend (none - it launches park_slam.launch.py,
+    # which has no `localization` argument at all) is not "gps" either.
+    s.add_argument("--localization", choices=LOCALIZATION_CHOICES, default=None,
+                   help="global localization backend for nav2 (default: gps)")
+    s.add_argument("--slam", action="store_true",
+                   help="map with slam_toolbox instead of running nav2 "
+                        "localization; mutually exclusive with "
+                        "--localization and --no-nav")
     for k in ("x", "y", "z", "yaw"):
         s.add_argument(f"--{k}", type=float, default=None)
     sub.add_parser("stop")
     sub.add_parser("status")
-    return p.parse_args(argv)
+    args = p.parse_args(argv)
+    if args.cmd == "start":
+        if args.slam and args.localization is not None:
+            p.error("--slam is mutually exclusive with --localization")
+        if args.slam and args.no_nav:
+            p.error("--slam is mutually exclusive with --no-nav")
+        if not args.slam and args.localization is None:
+            args.localization = "gps"
+    return args
 
 
 def save_state(path: Path, d: dict) -> None:
@@ -628,8 +706,10 @@ def load_state(path: Path):
 
 
 def cmd_start(shell, args, out=print) -> int:
+    slam = getattr(args, "slam", False)
     results: list[PhaseResult] = []
     state = {"world": args.world, "config": args.config, "no_nav": args.no_nav,
+             "slam": slam, "localization": getattr(args, "localization", None),
              "launch_pid": None, "bridge_pid": None, "nav_pid": None,
              "started_at": time.time(), "phase_reached": -1}
 
@@ -648,8 +728,8 @@ def cmd_start(shell, args, out=print) -> int:
             if getattr(args, "clean_on_fail", False):
                 record(phase_clean(shell))
         else:
-            nav = " nav" if results[6].status == "ok" else ""
-            out(f"READY {args.world} {args.config}{nav}")
+            tag = (" slam" if slam else " nav") if results[6].status == "ok" else ""
+            out(f"READY {args.world} {args.config}{tag}")
         return rc
 
     if not record(phase_clean(shell)):
@@ -669,7 +749,10 @@ def cmd_start(shell, args, out=print) -> int:
     state["bridge_pid"] = bpid
     if not record(r):
         return finish()
-    r, npid = phase_nav2(shell, args.world, args.no_nav)
+    if slam:
+        r, npid = phase_slam(shell, args.world)
+    else:
+        r, npid = phase_nav2(shell, args.world, args.no_nav, args.localization)
     state["nav_pid"] = npid
     record(r)
     return finish()
@@ -726,25 +809,37 @@ def cmd_status(shell, out=print) -> int:
     elif bp:
         results.append(PhaseResult(5, "extras", "ok" if bp_alive else "fail", f"bridge pid {bp}"))
 
-    nav_required = world != "?" and nav_config(world) is not None and not st.get("no_nav", False)
+    slam = st.get("slam", False)
+    name = "slam" if slam else "nav2"
+
+    def ready_check():
+        return shell.slam_ready() if slam else shell.nav_ready()
+
+    # slam mode has no config/nav2_<world>.yaml gate (park_slam.launch.py
+    # is not conditioned on one existing) - a recorded start with slam:
+    # true is itself sufficient to require it in status.
+    nav_required = world != "?" and not st.get("no_nav", False) and (
+        slam or nav_config(world) is not None)
     np_ = st.get("nav_pid")
     np_alive = bool(np_) and shell.pid_alive(np_)
     if nav_required:
         if np_alive:
-            f = shell.nav_ready()
-            results.append(PhaseResult(6, "nav2", "ok" if not f else "fail", "; ".join(f[:3]) or "ready"))
+            f = ready_check()
+            results.append(PhaseResult(6, name, "ok" if not f else "fail", "; ".join(f[:3]) or "ready"))
         else:
-            results.append(PhaseResult(6, "nav2", "fail",
-                           f"nav2 is required for {world} but the nav launch is not running"))
+            label = "slam" if slam else "nav2"
+            results.append(PhaseResult(6, name, "fail",
+                           f"{label} is required for {world} but the {label} launch is not running"))
     elif np_:
-        f = shell.nav_ready() if np_alive else ["nav launch dead"]
-        results.append(PhaseResult(6, "nav2", "ok" if not f else "fail", "; ".join(f[:3]) or "ready"))
+        f = ready_check() if np_alive else [f"{name} launch dead"]
+        results.append(PhaseResult(6, name, "ok" if not f else "fail", "; ".join(f[:3]) or "ready"))
 
     for r in results:
         out(format_line(r))
     rc = exit_code(results)
     nav_ok = any(r.phase == 6 and r.status == "ok" for r in results)
-    out(f"{'READY' if rc == 0 else 'NOT READY'} {world} {config}{' nav' if nav_ok else ''}")
+    tag = (" slam" if slam else " nav") if nav_ok else ""
+    out(f"{'READY' if rc == 0 else 'NOT READY'} {world} {config}{tag}")
     return rc
 
 

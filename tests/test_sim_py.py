@@ -452,7 +452,9 @@ def test_phase_nav2_ok_when_failures_drain():
     sh = NavShell([["map -> odom not published"], []])
     r, pid = phase_nav2(sh, "park", False)
     assert r.status == "ok" and pid == 900 and sh.launched[0][1] == "/tmp/nav.log"
-    assert "nav_park.launch.py" in sh.launched[0][0]
+    assert "park_stock.launch.py" in sh.launched[0][0]
+    # the seam: the navigation stages only, no second Gazebo (see phase_nav2).
+    assert "world_and_robot:=false" in sh.launched[0][0]
 
 
 def test_phase_nav2_fails_reporting_last_failures():
@@ -534,7 +536,8 @@ def _patched(monkeypatch, results):
     monkeypatch.setattr(S, "phase_controllers", lambda sh: results[3])
     monkeypatch.setattr(S, "phase_robot", lambda sh, w, z: results[4])
     monkeypatch.setattr(S, "phase_extras", lambda sh, c, lp: (results[5], None))
-    monkeypatch.setattr(S, "phase_nav2", lambda sh, w, n: (results[6], 900))
+    monkeypatch.setattr(S, "phase_nav2", lambda sh, w, n, loc=None: (results[6], 900))
+    monkeypatch.setattr(S, "phase_slam", lambda sh, w: (results[6], 900))
 
 
 OK7 = [PhaseResult(i, PHASE_NAMES[i], "ok", "d") for i in range(7)]
@@ -786,9 +789,9 @@ def test_lifecycle_states_first_node_gets_the_generous_discovery_budget():
     later services reuse that discovered graph and get the short budget."""
     c1 = _FakeClient(service_available=True, response_label="active")
     c2 = _FakeClient(service_available=True, response_label="active")
-    clients = {"map_server": c1, "filter_mask_server": c2}
+    clients = {"map_server": c1, "planner_server": c2}
     _lifecycle_states_from_clients(
-        ["map_server", "filter_mask_server"], clients,
+        ["map_server", "planner_server"], clients,
         spin_until_future_complete=_noop_spin, make_request=object,
         first_service_timeout=10.0, per_service_timeout=3.0)
     assert c1.wait_for_service_calls == [10.0]
@@ -930,3 +933,182 @@ def test_main_env_failure_uses_non_phase_prefix(monkeypatch, capsys):
     assert rc == 2
     assert "FAIL env: ROS 2 is not sourced" in out
     assert "FAIL 0" not in out
+
+
+# ---------------------------------------------------------------- --slam / --localization
+
+from scripts.sim import LOCALIZATION_CHOICES
+
+
+def test_parse_args_localization_defaults_to_gps():
+    a = parse_args(["start", "park"])
+    assert a.localization == "gps" and a.slam is False
+
+
+def test_parse_args_localization_explicit_choice():
+    a = parse_args(["start", "park", "--localization", "rssi"])
+    assert a.localization == "rssi"
+
+
+def test_parse_args_localization_rejects_unknown_backend():
+    import pytest
+    with pytest.raises(SystemExit):
+        parse_args(["start", "park", "--localization", "bogus"])
+
+
+def test_parse_args_localization_accepts_amcl_choice_early():
+    """amcl is accepted by the CLI ahead of park_stock.launch.py supporting it
+    (a separate, later task) - argparse must not reject it."""
+    a = parse_args(["start", "park", "--localization", "amcl"])
+    assert a.localization == "amcl"
+
+
+def test_parse_args_slam_sets_flag_and_leaves_localization_unset():
+    a = parse_args(["start", "park", "--slam"])
+    assert a.slam is True
+    assert a.localization is None
+
+
+def test_parse_args_slam_with_localization_errors():
+    import pytest
+    with pytest.raises(SystemExit):
+        parse_args(["start", "park", "--slam", "--localization", "rssi"])
+
+
+def test_parse_args_slam_with_no_nav_errors():
+    import pytest
+    with pytest.raises(SystemExit):
+        parse_args(["start", "park", "--slam", "--no-nav"])
+
+
+def test_parse_args_slam_alone_is_fine():
+    a = parse_args(["start", "park", "--slam"])
+    assert a.slam is True and a.no_nav is False
+
+
+from scripts.sim import phase_slam, SLAM_LOG
+
+
+class SlamShell(NavShell):
+    def slam_ready(self):
+        return self.ready_seq.pop(0) if len(self.ready_seq) > 1 else self.ready_seq[0]
+
+
+def test_phase_slam_launches_park_slam_and_reports_ok_when_ready():
+    sh = SlamShell(ready_seq=[[]])
+    r, pid = phase_slam(sh, "park")
+    assert r.status == "ok" and r.name == "slam" and pid == 900
+    assert sh.launched[0][1] == SLAM_LOG
+    assert "park_slam.launch.py" in sh.launched[0][0]
+
+
+def test_phase_slam_fails_reporting_last_failures():
+    sh = SlamShell(ready_seq=[["map -> odom not published"]])
+    r, _ = phase_slam(sh, "park")
+    assert r.status == "fail" and "map -> odom" in r.detail
+
+
+def test_phase_nav2_passes_localization_through_to_launch_args():
+    sh = NavShell([[]])
+    phase_nav2(sh, "park", False, "rssi")
+    assert "localization:=rssi" in sh.launched[0][0]
+
+
+def test_phase_nav2_defaults_localization_to_gps():
+    sh = NavShell([[]])
+    phase_nav2(sh, "park", False)
+    assert "localization:=gps" in sh.launched[0][0]
+
+
+def test_cmd_start_slam_calls_phase_slam_not_phase_nav2(monkeypatch, tmp_path):
+    import scripts.sim as S
+    monkeypatch.setattr(S, "STATE_FILE", tmp_path / "state.json")
+    _patched(monkeypatch, OK7)
+    calls = []
+    monkeypatch.setattr(S, "phase_slam", lambda sh, w: (calls.append((w,)) or PhaseResult(6, "slam", "ok", "d"), 900))
+
+    def boom_nav2(*a, **k):
+        raise AssertionError("phase_nav2 must not run under --slam")
+    monkeypatch.setattr(S, "phase_nav2", boom_nav2)
+
+    lines = []
+    rc = cmd_start(FakeShell(), parse_args(["start", "park", "--slam"]), out=lines.append)
+    assert rc == 0 and calls == [("park",)]
+    assert lines[-1] == "READY park default slam"
+    st = json.loads((tmp_path / "state.json").read_text())
+    assert st["slam"] is True
+
+
+def test_cmd_start_gps_default_reports_nav_tag(monkeypatch, tmp_path):
+    import scripts.sim as S
+    monkeypatch.setattr(S, "STATE_FILE", tmp_path / "state.json")
+    _patched(monkeypatch, OK7)
+    lines = []
+    rc = cmd_start(FakeShell(), parse_args(["start", "park"]), out=lines.append)
+    assert rc == 0 and lines[-1] == "READY park default nav"
+    st = json.loads((tmp_path / "state.json").read_text())
+    assert st["slam"] is False and st["localization"] == "gps"
+
+
+class SlamStatusShell(LiveStatusShell):
+    def __init__(self, *a, ready=None, **kw):
+        super().__init__(*a, ready=ready, **kw)
+    def slam_ready(self):
+        return self.ready
+
+
+def test_cmd_status_slam_uses_slam_ready_and_slam_tag(monkeypatch, tmp_path):
+    import scripts.sim as S
+    p = tmp_path / "state.json"
+    _write_state(p, slam=True)
+    monkeypatch.setattr(S, "STATE_FILE", p)
+    monkeypatch.setattr(S, "phase_robot", lambda sh, w, z: PhaseResult(4, "robot", "ok", "d"))
+    sh = SlamStatusShell(ready=[])
+
+    def boom_nav_ready():
+        raise AssertionError("nav_ready must not be called in slam status")
+    sh.nav_ready = boom_nav_ready
+
+    lines = []
+    rc = cmd_status(sh, out=lines.append)
+    assert rc == 0
+    assert lines[-1] == "READY park default slam"
+
+
+def test_cmd_status_slam_not_ready_reports_fail(monkeypatch, tmp_path):
+    import scripts.sim as S
+    p = tmp_path / "state.json"
+    _write_state(p, slam=True)
+    monkeypatch.setattr(S, "STATE_FILE", p)
+    monkeypatch.setattr(S, "phase_robot", lambda sh, w, z: PhaseResult(4, "robot", "ok", "d"))
+    sh = SlamStatusShell(ready=["map -> odom not published"])
+    sh.nav_ready = lambda: (_ for _ in ()).throw(AssertionError("must not call nav_ready"))
+    lines = []
+    rc = cmd_status(sh, out=lines.append)
+    assert rc != 0
+    assert lines[-1].startswith("NOT READY")
+
+
+from tools.check_nav2_ready import map_topic_published
+
+
+def test_map_topic_published_true_only_with_one_publisher():
+    assert map_topic_published("Type: nav_msgs/msg/OccupancyGrid\nPublisher count: 1\n")
+    assert not map_topic_published("Publisher count: 0\n")
+    assert not map_topic_published("")
+
+
+from tools.check_nav2_ready import slam_ready as _slam_ready_impl
+
+
+def test_slam_ready_reports_map_odom_failure():
+    fails = _slam_ready_impl(sh=lambda cmd, timeout=None: "", tf_check=lambda: False)
+    assert any("map -> odom" in f for f in fails)
+    assert any("/a200_0000/map" in f for f in fails)
+
+
+def test_slam_ready_empty_when_transform_and_map_topic_ok():
+    fails = _slam_ready_impl(
+        sh=lambda cmd, timeout=None: "Publisher count: 1\n",
+        tf_check=lambda: True)
+    assert fails == []

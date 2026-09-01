@@ -4,8 +4,8 @@
 #
 # The zip is the only copy of two files that are NOT in the upstream asset
 # packs and cannot be recovered by re-copying them:
-#   models/tree_8/bark8_collision.obj                    repaired vertex normals
-#   models/terreno_lago/materials/textures/lago_textura.jpg   8192² RGB conversion
+#   gz/share/tree_8/bark8_collision.obj                    repaired vertex normals
+#   gz/share/terreno_lago/materials/textures/lago_textura.jpg   8192² RGB conversion
 # Without the first, DART segfaults on the tree collision mesh; without the
 # second, lake's terrain renders untextured. Keep the zip.
 #
@@ -13,15 +13,15 @@
 # variants superseded by _lowpoly, a Blender source file Gazebo cannot read,
 # and the pre-conversion PNG texture. Verified against worlds/park.sdf and
 # worlds/lake.sdf including the .mtl texture chain, 2026-08-26:
-#   models/terreno_lago/lago_entero.dae                  342 MB
-#   models/tree_8/uploads_files_2812146_...AcerNikoense_8.blend  308 MB
-#   models/terreno_parque/terreno_parque.dae             290 MB
-#   models/terreno_lago/lago.dae                         243 MB
-#   models/terreno_lago/lago_1.dae                       219 MB
-#   models/terreno_lago/lago_2.dae                       216 MB
-#   models/terreno_lago/materials/textures/lago_textura.png      125 MB
-#   models/camino_parque/camino_parque.dae                81 MB
-models/
+#   gz/share/terreno_lago/lago_entero.dae                  342 MB
+#   gz/share/tree_8/uploads_files_2812146_...AcerNikoense_8.blend  308 MB
+#   gz/share/terreno_parque/terreno_parque.dae             290 MB
+#   gz/share/terreno_lago/lago.dae                         243 MB
+#   gz/share/terreno_lago/lago_1.dae                       219 MB
+#   gz/share/terreno_lago/lago_2.dae                       216 MB
+#   gz/share/terreno_lago/materials/textures/lago_textura.png      125 MB
+#   gz/share/camino_parque/camino_parque.dae                81 MB
+gz/share/
 
 # Manual backups from editing sessions. Git supersedes these.
 *.bak

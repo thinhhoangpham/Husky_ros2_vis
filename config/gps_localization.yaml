@@ -121,3 +121,46 @@ a200_0000:
                      false, false, false]
       odom1_differential: false
       odom1_queue_size: 10
+
+      # Rejects navsat_transform's first, wrong-origin odometry/gps message.
+      #
+      # navsat_transform converts fixes through a GeographicLib::LocalCartesian
+      # whose origin is only established by setTransformGps()'s Reset()
+      # (navsat_transform.cpp:955). With wait_for_datum true that is reached
+      # only via setManualDatum(), which computeTransform() gates on
+      # has_transform_odom_ (:264) and which runs only from the 30 Hz timer -
+      # but the timer is created AFTER the `delay` sleep (:234) while the
+      # subscriptions are created BEFORE it (:198,:202). So the sleep queues a
+      # fix (KeepLast(1)) that gpsFixCallback (:729) converts against an
+      # un-Reset origin of lat0=lon0=0 the instant spinning begins, and
+      # applying the datum does not clear gps_updated_ - so prepareGpsOdometry
+      # (:895) publishes that stale pose as the very first odometry/gps.
+      # Measured live: the datum's Reset lands 33 ms after "Delay elapsed",
+      # one tick too late, and the published pose was (636893.98, 4855650.27).
+      # That is not UTM (zone 32N of the datum is 492818.44, 5527517.14); it is
+      # the ENU offset from lat0=lon0=0 to the datum, (636846.49, 4855632.00),
+      # plus the robot's own ~45.6 m spawn offset - which is what identifies
+      # the un-Reset origin as the cause. Fusing it moved map -> odom by
+      # 4,897,662 m and took the filter ~11 s to walk back.
+      #
+      # 1000.0 sits in a wide, measured gap. R is floored to 1e-9 (ekf.cpp:145)
+      # because the sim GPS reports all-zero covariance, so the Mahalanobis
+      # denominator is P alone. At the outlier P_xx is ~0.2 m^2 (1e-9 initial,
+      # grown by the default Q_xx 0.05 m^2/s over the ~3.35 s the filter ran on
+      # odom0/imu0 alone), i.e. sigma ~0.45 m:
+      #   the 4,897,662 m outlier is ~1.1e7 sigmas - rejected by 4 orders
+      #   the legitimate ~45.6 m first jump to the spawn is ~101 sigmas, so a
+      #     threshold of 5 or 10 would reject it too and wedge the filter at
+      #     the origin; 1000 admits it once P exceeds 0.0021 m^2, ~0.04 s of
+      #     prediction, so the next real fix (2 Hz) lands it
+      #   settled P_xx is 7.056e-3 m^2 (measured on odometry/filtered), sigma
+      #     0.084 m, so 1000 sigmas is 84 m against a largest settled step of
+      #     0.0277 m - it never fires in normal operation
+      # Rejection is applied here because initialized_ is a whole-filter flag
+      # (filter_base.cpp:206,:248) already set by odom0/imu0, so this first
+      # ABSOLUTE position still goes through correct() and its threshold test;
+      # it is not treated as the initialising measurement. A failed test leaves
+      # state_ and the covariance untouched (ekf.cpp:191-203), so the bad
+      # transform is never published rather than published and walked back.
+      # The default is double::max(), i.e. no rejection (ros_filter.cpp:1235).
+      odom1_pose_rejection_threshold: 1000.0

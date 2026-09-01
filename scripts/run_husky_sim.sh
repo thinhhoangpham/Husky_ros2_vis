@@ -73,14 +73,16 @@ rm -f /dev/shm/fastrtps_* /dev/shm/sem.fastrtps_* 2>/dev/null || true
 source /opt/ros/jazzy/setup.bash
 
 # Custom Gazebo models used by worlds/park.sdf (model://arbol4/... etc.) live
-# in this repo, outside any ROS package. Harmonic reads GZ_SIM_RESOURCE_PATH
-# (not Classic's GAZEBO_MODEL_PATH).
+# in this repo under gz/share/, outside any ROS package. Harmonic reads
+# GZ_SIM_RESOURCE_PATH (not Classic's GAZEBO_MODEL_PATH).
 #
 # This export only covers running `gz sim worlds/park.sdf` by hand: on the
 # `ros2 launch` path below, clearpath_gz's gz_sim.launch.py OVERWRITES
-# GZ_SIM_RESOURCE_PATH, so the models dir is injected in our own
-# launch/gz_sim.launch.py instead. Keep the two in sync.
-export GZ_SIM_RESOURCE_PATH="/home/thinhpham/Documents/Husky_viz/models${GZ_SIM_RESOURCE_PATH:+:$GZ_SIM_RESOURCE_PATH}"
+# GZ_SIM_RESOURCE_PATH, so gz/share is injected in our own
+# launch/gz_sim.launch.py instead. Keep the two in sync — and note gz/share
+# also feeds the stock AMENT_PREFIX_PATH route, making this a three-way
+# constraint (CLAUDE.md gotcha #6).
+export GZ_SIM_RESOURCE_PATH="/home/thinhpham/Documents/Husky_viz/gz/share${GZ_SIM_RESOURCE_PATH:+:$GZ_SIM_RESOURCE_PATH}"
 
 # (Re)apply the robot config before launching so the sim never silently runs
 # whatever apply_config.sh last deployed: clearpath_gz regenerates the URDF

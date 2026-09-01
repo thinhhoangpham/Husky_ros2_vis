@@ -4,8 +4,8 @@ import yaml
 from PIL import Image
 
 from tools.generate_park_maps import (
-    GROUND_Z, ORIGIN, RES, SIZE, TERRAIN,
-    rasterize_keepout, rasterize_obstacles, world_to_pixel, write_map,
+    GROUND_Z, ORIGIN, RES, SIZE,
+    rasterize_obstacles, world_to_pixel, write_map,
 )
 
 REPO = "/home/thinhpham/Documents/Husky_viz"
@@ -25,24 +25,6 @@ def test_world_to_pixel_is_metric():
     assert c1 - c0 == int(round(1.0 / RES))
     c2, r2 = world_to_pixel(0.0, 1.0)
     assert r0 - r2 == int(round(1.0 / RES))
-
-
-def test_keepout_marks_outside_terrain_lethal():
-    img = rasterize_keepout()
-    a = np.asarray(img)
-    assert a.shape == (SIZE[1], SIZE[0])
-    # centre of the park is free (white)
-    c, r = world_to_pixel(0.0, 0.0)
-    assert a[r, c] == 255
-    # 2 m beyond the north edge is lethal (black)
-    c, r = world_to_pixel(TERRAIN[1] + 2.0, 0.0)
-    assert a[r, c] == 0
-    # 2 m beyond the west edge is lethal
-    c, r = world_to_pixel(0.0, TERRAIN[3] + 2.0)
-    assert a[r, c] == 0
-    # just inside the north edge is free
-    c, r = world_to_pixel(TERRAIN[1] - 0.5, 0.0)
-    assert a[r, c] == 255
 
 
 def test_obstacles_mark_a_known_tree_and_leave_the_spawn_clear():
@@ -99,7 +81,7 @@ def test_obstacles_do_not_mark_the_ground():
 
 
 def test_write_map_emits_aligned_yaml(tmp_path):
-    img = rasterize_keepout()
+    img = rasterize_obstacles(SDF, GROUND_Z + 0.10, GROUND_Z + 1.20)
     write_map(img, "unit_test_map", str(tmp_path))
     meta = yaml.safe_load((tmp_path / "unit_test_map.yaml").read_text())
     assert meta["resolution"] == RES

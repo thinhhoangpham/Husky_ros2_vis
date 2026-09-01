@@ -10,7 +10,7 @@ SDF = f"{REPO}/worlds/park.sdf"
 
 def test_load_mesh_terrain_is_unit_normalised():
     """terreno_parque is authored as a unit mesh: +/-1 in x and y."""
-    V, F = load_mesh(f"{REPO}/models/terreno_parque/terreno_parque_lowpoly.dae")
+    V, F = load_mesh(f"{REPO}/gz/share/terreno_parque/terreno_parque_lowpoly.dae")
     assert V.shape[1] == 3
     assert F.shape[1] == 3
     assert len(V) == 66049
@@ -26,7 +26,7 @@ def test_load_mesh_does_not_apply_collada_up_axis():
     simulator, not the COLLADA spec: converting lays this 16.5 m pylon on its
     side and sinks park's 16 benches below the terrain. See
     tools/sdf_geometry.py:192-201 before "fixing" this (CLAUDE.md gotcha #35)."""
-    path = f"{REPO}/models/linea1/postes_lowpoly.dae"
+    path = f"{REPO}/gz/share/linea1/postes_lowpoly.dae"
     ns = "{http://www.collada.org/2005/11/COLLADASchema}"
     up = ET.parse(path).getroot().find(f"{ns}asset/{ns}up_axis")
     assert up is not None and up.text.strip() == "Y_UP", "fixture is no longer Y_UP"

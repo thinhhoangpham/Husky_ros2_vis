@@ -20,8 +20,9 @@ import numpy as np
 
 NS = "{http://www.collada.org/2005/11/COLLADASchema}"
 
-# Every model:// URI in this world resolves under models/.
-MODELS_ROOT = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "models")
+# Every model:// URI in this world resolves under gz/share/ (an ament-prefix-
+# shaped dir so stock clearpath_gz finds it too — see CLAUDE.md gotcha #6).
+MODELS_ROOT = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "gz", "share")
 
 
 def _resolve_uri(uri: str) -> str:

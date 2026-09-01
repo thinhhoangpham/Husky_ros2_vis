@@ -1,9 +1,7 @@
 #!/usr/bin/env python3
-"""Generate the nav2 prior obstacle map and terrain keepout mask for park.
+"""Generate the nav2 prior obstacle map for park.
 
-Both rasters share one origin, resolution and size, defined here as the single
-source of truth. Nav2 requires the map and its filter mask to be identically
-aligned; a one-cell mismatch silently shifts the no-go zone.
+Origin, resolution and size are defined here as the single source of truth.
 
 Nav2 image convention with negate=0: black (0) is occupied, white (255) free.
 
@@ -63,17 +61,6 @@ def world_to_pixel(x: float, y: float) -> tuple[int, int]:
     col = int(math.floor((x - ORIGIN[0]) / RES + 1e-9))
     row = SIZE[1] - 1 - int(math.floor((y - ORIGIN[1]) / RES + 1e-9))
     return col, row
-
-
-def rasterize_keepout() -> Image.Image:
-    """White inside the terrain rectangle, black outside."""
-    img = Image.new("L", SIZE, OCCUPIED)
-    draw = ImageDraw.Draw(img)
-    xmin, xmax, ymin, ymax = TERRAIN
-    c0, r0 = world_to_pixel(xmin, ymin)
-    c1, r1 = world_to_pixel(xmax, ymax)
-    draw.rectangle([min(c0, c1), min(r0, r1), max(c0, c1), max(r0, r1)], fill=FREE)
-    return img
 
 
 def prior_skip_models(sdf_path: str) -> set[str]:
@@ -136,10 +123,7 @@ def main() -> None:
     obstacles = rasterize_obstacles(args.sdf, GROUND_Z + 0.10, GROUND_Z + 1.20)
     write_map(obstacles, "park_map", args.out)
 
-    print("==> keepout mask")
-    write_map(rasterize_keepout(), "park_keepout", args.out)
-
-    print(f"==> both rasters: {SIZE[0]}x{SIZE[1]} @ {RES} m, origin {ORIGIN}")
+    print(f"==> raster: {SIZE[0]}x{SIZE[1]} @ {RES} m, origin {ORIGIN}")
 
 
 if __name__ == "__main__":

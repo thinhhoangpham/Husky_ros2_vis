@@ -2,6 +2,7 @@
 
 ```bash
 cd ~/Documents/Husky_viz
+source /opt/ros/jazzy/setup.bash
 python3 scripts/sim.py stop
 ```
 

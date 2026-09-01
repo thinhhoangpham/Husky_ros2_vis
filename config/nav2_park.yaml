@@ -146,11 +146,6 @@ local_costmap:
       footprint: "[ [0.55, 0.45], [0.55, -0.45], [-0.55, -0.45], [-0.55, 0.45] ]"
       always_send_full_costmap: true
       plugins: ["static_layer", "voxel_layer", "inflation_layer"]
-      filters: ["keepout_filter"]
-      keepout_filter:
-        plugin: "nav2_costmap_2d::KeepoutFilter"
-        enabled: True
-        filter_info_topic: "/a200_0000/costmap_filter_info"
       inflation_layer:
         plugin: "nav2_costmap_2d::InflationLayer"
         cost_scaling_factor: 4.0
@@ -208,22 +203,15 @@ global_costmap:
       origin_x: -55.0
       origin_y: -31.55
       # The global costmap carries a live obstacle layer, matching stock nav2
-      # and Clearpath: prior map (maps/park_map.pgm) + live scan + keepout mask
-      # + inflation. Decision 2026-08-27 - this SUPERSEDES the earlier
+      # and Clearpath: prior map (maps/park_map.pgm) + live scan +
+      # inflation. Decision 2026-08-27 - this SUPERSEDES the earlier
       # same-day "static global costmap" decision, which removed the sensor
       # layer. Consequence: the planner now learns obstacles absent from the
       # prior map (the 15 arbol4 trees are excluded from it by design, gotcha
       # #28, as is anything spawned at runtime) and replans around them, rather
       # than planning straight through and leaving all avoidance to the local
-      # costmap + MPPI. The keepout filter stays - it is the only thing
-      # stopping the planner routing off the edge of the terrain (gotcha #30),
-      # since a lidar ray past the edge returns max range and reads as free.
+      # costmap + MPPI.
       plugins: ["static_layer", "obstacle_layer", "inflation_layer"]
-      filters: ["keepout_filter"]
-      keepout_filter:
-        plugin: "nav2_costmap_2d::KeepoutFilter"
-        enabled: True
-        filter_info_topic: "/a200_0000/costmap_filter_info"
       # Absolute topic, deliberately - same trap as the local costmap's
       # voxel_layer above. A relative "sensors/..." resolves inside the costmap
       # sub-node (/a200_0000/global_costmap/sensors/lidar2d_0/scan), binds to
@@ -259,9 +247,9 @@ global_costmap:
           # Known risk (gotcha #30): a ray past the terrain edge returns max
           # range, which the costmap reads as free and actively clears, so
           # 25 m clearing is far more aggressive over the void beyond the
-          # boundary than 3.0 m was. keepout_filter is a separate costmap
-          # filter and should still stop the planner routing off the
-          # terrain - this is the thing to watch.
+          # boundary than 3.0 m was. The keepout filter that used to
+          # assert the boundary was removed 2026-08-31; off-terrain goals
+          # are rejected by tools/nav_goal.py instead.
           raytrace_max_range: 25.0
           raytrace_min_range: 0.0
           obstacle_max_range: 20.0
@@ -286,7 +274,7 @@ planner_server:
       use_astar: false
       allow_unknown: true
 
-# smoother_server and docking_server are deliberately absent: launch/nav_park.launch.py
+# smoother_server and docking_server are deliberately absent: launch/park_stock.launch.py
 # does not launch them (nor route_server), so their parameters would never be read.
 # Note velocity_smoother below is a DIFFERENT node and IS launched.
 
