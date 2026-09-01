@@ -294,6 +294,21 @@ class Shell:
     def gz_pose(self) -> str:
         return self.run(f"gz model -m {ROBOT_MODEL} -p", timeout=10)
 
+    def scene_info(self, world: str) -> str:
+        return self.run(
+            f"gz service -s /world/{gz_world_name(world)}/scene/info "
+            f"--reqtype gz.msgs.Empty --reptype gz.msgs.Scene --timeout 30000 --req ''",
+            timeout=35)
+
+    def gui_alive(self) -> bool:
+        # A `gz sim` process that is NOT the server, per sim-operator.md's
+        # documented form. `|| true` absorbs grep's nonzero exit when no
+        # matching line is left, which `set -eo pipefail` would otherwise
+        # turn into a hard failure of the whole pipeline.
+        out = self.run('pgrep -af "gz sim" | grep -v "bash -c" | grep -v server || true',
+                       timeout=10)
+        return bool(out.strip())
+
     def nav_ready(self) -> list[str]:
         sys.path.append(REPO)
         from tools.check_nav2_ready import nav_ready
@@ -472,6 +487,29 @@ ROBOT_DEADLINE = 10.0
 LANDED_TOL = 0.5
 
 
+RENDERER_FAIL_MARKER = "GUI missed the spawn"
+
+
+def scene_robot_count(scene_info_text: str) -> int:
+    """Pure count of `ROBOT_MODEL` occurrences in a `scene/info` service
+    reply, mirroring the documented renderer gate
+    (.claude/agents/sim-operator.md, "It is up" means the renderer too):
+    `gz service .../scene/info ... | grep -c 'a200_0000/robot'`.
+
+    CAVEAT (documented honestly, not hidden): this reflects the SERVER's
+    scene graph, not what the GUI actually rendered. The user's own notes
+    treat count==1 as the renderer check, but on the failing runs that
+    prompted this gate the count was reported as 1 while the robot was
+    still invisible in the GUI window - so this check, run alone, is not
+    guaranteed to catch every renderer-miss. It is implemented exactly as
+    documented because that is the only check `sim-operator.md` specifies;
+    no more reliable GUI-side signal (a GUI-specific scene/state topic) was
+    found to exist for gz-sim Harmonic 8.11 during this fix - see the
+    session report for what was searched.
+    """
+    return sum(1 for line in scene_info_text.splitlines() if ROBOT_MODEL in line)
+
+
 def parse_gz_pose(gz_model_output: str) -> tuple[float, float, float] | None:
     m = re.search(r"Pose[^\n]*\n\s*\[([^\]]+)\]", gz_model_output)
     if not m:
@@ -504,10 +542,18 @@ def phase_robot(shell, world: str, z_override: float | None) -> PhaseResult:
     if abs(pose[2] - zs) > LANDED_TOL:
         return PhaseResult(4, "robot", "fail",
                            f"z={pose[2]:.2f} vs spawn z={zs:.2f}: fell through terrain? (CLAUDE.md #23)")
+    scene_count = scene_robot_count(shell.scene_info(world))
+    gui_up = shell.gui_alive()
+    if scene_count != 1 or not gui_up:
+        return PhaseResult(4, "robot", "fail",
+                           f"robot in physics but NOT in the renderer ({RENDERER_FAIL_MARKER}); "
+                           f"scene count {scene_count}, GUI {'alive' if gui_up else 'none'} "
+                           "- remedy is a full CLEAN_SIM.md + RUN_SIM.md restart")
+
     received = sum(1 for c in counts.values() if c > 0)
     return PhaseResult(4, "robot", "ok",
                        f"pose {pose[0]:.2f} {pose[1]:.2f} {pose[2]:.2f}  "
-                       f"{received}/{len(ROBOT_TOPICS)} topics receiving")
+                       f"{received}/{len(ROBOT_TOPICS)} topics receiving  renderer ok")
 
 
 BRIDGE_LOG = "/tmp/bridge.log"
@@ -608,6 +654,7 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     s.add_argument("--config", default="default")
     s.add_argument("--no-nav", action="store_true")
     s.add_argument("--clean-on-fail", action="store_true")
+    s.add_argument("--no-retry", action="store_true")
     for k in ("x", "y", "z", "yaw"):
         s.add_argument(f"--{k}", type=float, default=None)
     sub.add_parser("stop")
@@ -627,7 +674,20 @@ def load_state(path: Path):
         return None
 
 
-def cmd_start(shell, args, out=print) -> int:
+# The renderer gate (phase_robot's scene/GUI check) is the one intermittent,
+# environment-timing failure in this pipeline - the documented remedy is a
+# full clean+restart, and it was observed failing ~1 in 3 starts. 3 total
+# attempts (1 initial + 2 retries) pushes the odds of exhausting all
+# attempts down to roughly (1/3)^3 ~= 3.7% while keeping a hung retry loop
+# bounded and cheap - each attempt is a full CLEAN_SIM.md-equivalent cycle,
+# not a quick recheck.
+RETRY_ATTEMPTS = 3
+
+
+def _run_start_attempt(shell, args, out) -> tuple[list[PhaseResult], dict]:
+    """One full clean -> ... -> nav2 cycle. No retry logic in here - that
+    lives in cmd_start, which decides whether the whole cycle is worth
+    repeating."""
     results: list[PhaseResult] = []
     state = {"world": args.world, "config": args.config, "no_nav": args.no_nav,
              "launch_pid": None, "bridge_pid": None, "nav_pid": None,
@@ -639,40 +699,68 @@ def cmd_start(shell, args, out=print) -> int:
         state["phase_reached"] = r.phase
         return r.status != "fail"
 
-    def finish() -> int:
-        save_state(STATE_FILE, state)
-        rc = exit_code(results)
-        if rc:
-            f = results[-1]
-            out(f"FAIL {f.phase} {f.name}: {f.detail}")
-            if getattr(args, "clean_on_fail", False):
-                record(phase_clean(shell))
-        else:
-            nav = " nav" if results[6].status == "ok" else ""
-            out(f"READY {args.world} {args.config}{nav}")
-        return rc
-
     if not record(phase_clean(shell)):
-        return finish()
+        return results, state
     if not record(phase_config(shell, args.config)):
-        return finish()
+        return results, state
     r, pid = phase_launch(shell, args.world, pose_args(args))
     state["launch_pid"] = pid
     save_state(STATE_FILE, state)
     if not record(r):
-        return finish()
+        return results, state
     if not record(phase_controllers(shell)):
-        return finish()
+        return results, state
     if not record(phase_robot(shell, args.world, args.z)):
-        return finish()
+        return results, state
     r, bpid = phase_extras(shell, args.config, pid)
     state["bridge_pid"] = bpid
     if not record(r):
-        return finish()
+        return results, state
     r, npid = phase_nav2(shell, args.world, args.no_nav)
     state["nav_pid"] = npid
     record(r)
-    return finish()
+    return results, state
+
+
+def _renderer_gate_failure(results: list[PhaseResult]) -> bool:
+    """True only when the run's SOLE failure is phase 4 (robot) failing for
+    the renderer-gate reason - never for a silent topic or a robot that fell
+    through the terrain, and never when an earlier phase also failed. Only
+    this case is worth burning a retry on, per the task's retry scope."""
+    fails = [r for r in results if r.status == "fail"]
+    return (len(fails) == 1 and fails[0].phase == 4
+            and RENDERER_FAIL_MARKER in fails[0].detail)
+
+
+def cmd_start(shell, args, out=print) -> int:
+    max_attempts = 1 if getattr(args, "no_retry", False) else RETRY_ATTEMPTS
+    attempt = 1
+    while True:
+        results, state = _run_start_attempt(shell, args, out)
+        rc = exit_code(results)
+
+        if rc == 0:
+            nav = " nav" if results[6].status == "ok" else ""
+            suffix = f" (attempt {attempt} of {max_attempts})" if attempt > 1 else ""
+            out(f"READY {args.world} {args.config}{nav}{suffix}")
+            save_state(STATE_FILE, state)
+            return 0
+
+        if _renderer_gate_failure(results) and attempt < max_attempts:
+            out(f"retrying (attempt {attempt + 1} of {max_attempts}) after renderer gate failure - "
+                f"restarting the whole cycle clean")
+            attempt += 1
+            continue
+
+        f = results[-1]
+        out(f"FAIL {f.phase} {f.name}: {f.detail}")
+        if getattr(args, "clean_on_fail", False):
+            r = phase_clean(shell)
+            results.append(r)
+            out(format_line(r))
+            state["phase_reached"] = r.phase
+        save_state(STATE_FILE, state)
+        return rc
 
 
 def cmd_stop(shell, out=print) -> int:

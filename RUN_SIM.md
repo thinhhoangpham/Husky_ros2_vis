@@ -21,6 +21,20 @@ bridges compass/radio when the config has them, and brings up nav2 when
 `config/nav2_<world>.yaml` exists (`--no-nav` to skip). Pose overrides:
 `--x --y --z --yaw`.
 
+Phase 4 (`robot`) also checks the renderer, not just the ROS graph and
+physics server: the Gazebo GUI can finish loading its scene while the robot
+is being spawned and silently miss it, leaving physics/topics fine but
+nothing visible in the window (see `.claude/agents/sim-operator.md`). It
+queries `gz service .../scene/info` for the robot's model count and checks
+that a GUI process (not the server) is alive; either being wrong fails phase
+4 with `... GUI missed the spawn ...`. This failure is intermittent
+(~1 in 3 park starts, observed 2026-08-31) and the only remedy is a full
+clean+restart, so `sim.py start` retries the *entire* cycle automatically,
+up to 3 total attempts, whenever phase 4 fails for this reason specifically
+(never for a silent topic or a robot that fell through the terrain — see
+`--z`/gotcha #23). Pass `--no-retry` to disable this and fail on the first
+attempt.
+
 `--config full` on a world with a nav2 config (park) currently fails phase 6:
 nav2's lifecycle bring-up stalls under `full` (`filter_mask_server`,
 `costmap_filter_info_server`, `controller_server` never activate). This is a
@@ -36,7 +50,7 @@ Expected shape (park):
 [1 config     ] ok   default  (sensors: gps_0 imu_0 lidar2d_0 lidar3d_0)
 [2 launch     ] ok   pid 41233, park stepping after 6.8 s
 [3 controllers] ok   clean            <- or: recovered  (...)
-[4 robot      ] ok   pose 45.64 0.02 3.12  4/4 topics receiving
+[4 robot      ] ok   pose 45.64 0.02 3.12  4/4 topics receiving  renderer ok
 [5 extras     ] skip default config has no compass/radio
 [6 nav2       ] ok   map->odom present, all lifecycle nodes active
 READY park default nav
