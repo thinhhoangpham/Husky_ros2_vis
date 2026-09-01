@@ -98,8 +98,6 @@ class FakeShell:
     def pid_alive(self, pid): return pid in self.run_out.get("alive", ())
     def now(self): return self.t
     def pause(self, s): self.t += s
-    def scene_info(self, world): return "a200_0000/robot\n"
-    def gui_alive(self): return True
 
 
 KILL_FILE = {"/home/thinhpham/Documents/Husky_viz/scripts/kill_sim.sh":
@@ -338,13 +336,10 @@ def test_spawn_z_from_world_table_and_override():
 
 
 class RobotShell(FakeShell):
-    def __init__(self, rates, pose_out, scene_out="a200_0000/robot\n", gui_up=True):
+    def __init__(self, rates, pose_out):
         super().__init__(); self.rates = rates; self.pose_out = pose_out
-        self.scene_out = scene_out; self.gui_up = gui_up
     def receive(self, topics, deadline): return {k: self.rates.get(k, 0.0) for k in topics}
     def gz_pose(self): return self.pose_out
-    def scene_info(self, world): return self.scene_out
-    def gui_alive(self): return self.gui_up
 
 
 def test_phase_robot_ok():
@@ -370,41 +365,6 @@ def test_phase_robot_ok_detail_reports_counts_not_rates():
     sh = RobotShell({"odom": 1, "imu": 40, "scan": 3, "points": 1}, GZ_MODEL)
     r = phase_robot(sh, "park", None)
     assert r.status == "ok" and "4/4 topics receiving" in r.detail and "Hz" not in r.detail
-
-
-from scripts.sim import scene_robot_count, RENDERER_FAIL_MARKER
-
-SCENE_WITH_ROBOT = "model { name: \"a200_0000/robot\" }\nmodel { name: \"tree_8\" }\n"
-SCENE_WITHOUT_ROBOT = "model { name: \"tree_8\" }\n"
-
-
-def test_scene_robot_count_counts_matching_lines():
-    assert scene_robot_count(SCENE_WITH_ROBOT) == 1
-    assert scene_robot_count(SCENE_WITHOUT_ROBOT) == 0
-    assert scene_robot_count(SCENE_WITH_ROBOT + SCENE_WITH_ROBOT) == 2
-
-
-def test_phase_robot_ok_when_renderer_confirms_robot():
-    sh = RobotShell({"odom": 33.0, "imu": 67.0, "scan": 24.0, "points": 13.0}, GZ_MODEL,
-                    scene_out=SCENE_WITH_ROBOT, gui_up=True)
-    r = phase_robot(sh, "park", None)
-    assert r.status == "ok" and "renderer ok" in r.detail
-
-
-def test_phase_robot_fails_when_scene_missing_robot_even_though_gui_alive():
-    sh = RobotShell({"odom": 33.0, "imu": 67.0, "scan": 24.0, "points": 13.0}, GZ_MODEL,
-                    scene_out=SCENE_WITHOUT_ROBOT, gui_up=True)
-    r = phase_robot(sh, "park", None)
-    assert r.status == "fail" and RENDERER_FAIL_MARKER in r.detail
-    assert "scene count 0" in r.detail and "GUI alive" in r.detail
-
-
-def test_phase_robot_fails_when_gui_process_is_gone_even_though_scene_ok():
-    sh = RobotShell({"odom": 33.0, "imu": 67.0, "scan": 24.0, "points": 13.0}, GZ_MODEL,
-                    scene_out=SCENE_WITH_ROBOT, gui_up=False)
-    r = phase_robot(sh, "park", None)
-    assert r.status == "fail" and RENDERER_FAIL_MARKER in r.detail
-    assert "GUI none" in r.detail
 
 
 from scripts.sim import extras_features, bridge_args, phase_extras, REPO
@@ -927,75 +887,6 @@ def test_cmd_status_skips_nav_requirement_when_no_nav_recorded(monkeypatch, tmp_
     rc = cmd_status(sh, out=lines.append)
     assert rc == 0
     assert lines[-1] == "READY park default"
-
-
-def _patched_seq(monkeypatch, sequences):
-    """Like _patched, but phase_robot returns a different scripted result on
-    each successive call, one per retry attempt."""
-    import scripts.sim as S
-    monkeypatch.setattr(S, "phase_clean", lambda sh: OK7[0])
-    monkeypatch.setattr(S, "phase_config", lambda sh, c: OK7[1])
-    monkeypatch.setattr(S, "phase_launch", lambda sh, w, p: (OK7[2], 4242))
-    monkeypatch.setattr(S, "phase_controllers", lambda sh: OK7[3])
-    calls = {"n": 0}
-
-    def robot(sh, w, z):
-        r = sequences[min(calls["n"], len(sequences) - 1)]
-        calls["n"] += 1
-        return r
-    monkeypatch.setattr(S, "phase_robot", robot)
-    monkeypatch.setattr(S, "phase_extras", lambda sh, c, lp: (OK7[5], None))
-    monkeypatch.setattr(S, "phase_nav2", lambda sh, w, n: (OK7[6], 900))
-    return calls
-
-
-RENDERER_FAIL = PhaseResult(4, "robot", "fail", f"... {RENDERER_FAIL_MARKER} ... scene count 0, GUI alive")
-
-
-def test_cmd_start_retries_on_renderer_gate_failure_then_succeeds(monkeypatch, tmp_path):
-    import scripts.sim as S
-    monkeypatch.setattr(S, "STATE_FILE", tmp_path / "state.json")
-    calls = _patched_seq(monkeypatch, [RENDERER_FAIL, RENDERER_FAIL, OK7[4]])
-    lines = []
-    rc = cmd_start(FakeShell(), parse_args(["start", "park"]), out=lines.append)
-    assert rc == 0
-    assert calls["n"] == 3
-    assert lines[-1] == "READY park default nav (attempt 3 of 3)"
-    assert sum(1 for l in lines if "retrying" in l) == 2
-
-
-def test_cmd_start_gives_up_after_retry_cap_and_reports_renderer_fail(monkeypatch, tmp_path):
-    import scripts.sim as S
-    monkeypatch.setattr(S, "STATE_FILE", tmp_path / "state.json")
-    calls = _patched_seq(monkeypatch, [RENDERER_FAIL, RENDERER_FAIL, RENDERER_FAIL])
-    lines = []
-    rc = cmd_start(FakeShell(), parse_args(["start", "park"]), out=lines.append)
-    assert rc == exit_code([RENDERER_FAIL])
-    assert calls["n"] == 3          # exactly RETRY_ATTEMPTS, no fourth attempt
-    assert lines[-1].startswith(f"FAIL 4 robot: ... {RENDERER_FAIL_MARKER}")
-
-
-def test_cmd_start_does_not_retry_a_non_renderer_robot_failure(monkeypatch, tmp_path):
-    import scripts.sim as S
-    monkeypatch.setattr(S, "STATE_FILE", tmp_path / "state.json")
-    other_fail = PhaseResult(4, "robot", "fail", "no messages within 10 s on: odom")
-    calls = _patched_seq(monkeypatch, [other_fail])
-    lines = []
-    rc = cmd_start(FakeShell(), parse_args(["start", "park"]), out=lines.append)
-    assert calls["n"] == 1          # never retried
-    assert lines[-1] == "FAIL 4 robot: no messages within 10 s on: odom"
-
-
-def test_cmd_start_no_retry_flag_disables_retry(monkeypatch, tmp_path):
-    import scripts.sim as S
-    monkeypatch.setattr(S, "STATE_FILE", tmp_path / "state.json")
-    calls = _patched_seq(monkeypatch, [RENDERER_FAIL, OK7[4]])
-    lines = []
-    rc = cmd_start(FakeShell(), parse_args(["start", "park", "--no-retry"]),
-                   out=lines.append)
-    assert calls["n"] == 1          # --no-retry means a single attempt
-    assert rc != 0
-    assert lines[-1].startswith("FAIL 4 robot:")
 
 
 def test_cmd_start_records_no_nav_flag(monkeypatch, tmp_path):
