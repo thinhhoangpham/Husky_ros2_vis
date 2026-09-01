@@ -253,6 +253,308 @@ If the goal is never accepted, nav2 came up without `map -> odom`
 
 ---
 
+## Demo: warehouse SLAM mapping run
+
+Builds an occupancy map of the stock `warehouse` world by driving a manual
+perimeter loop under `slam_toolbox`, then saves it to `maps/`. Executed
+2026-08-31; every number below is measured from that run, not a target.
+
+**World:** `warehouse`
+**Robot config:** `default`
+**Spawn override:** none — Clearpath's default, settled at `(1.965, -0.044)` yaw `0.019`
+
+**Prerequisite, and a deviation to be aware of:** this run was executed against a
+sim started by hand as `ros2 launch clearpath_gz simulation.launch.py
+world:=warehouse` with `slam_toolbox` launched separately, **not** through
+`python3 scripts/sim.py start warehouse`. It was already running and holding a
+pose graph that a restart would have discarded. Re-running this demo from a
+`sim.py start warehouse` READY verdict has not been tried.
+
+### Step 1 — Put RViz on sim time
+
+RViz launched without `use_sim_time` drops messages with `the timestamp on the
+message is earlier than all the data in the transform cache`. Stop only the
+RViz launch tree — never Gazebo, never `slam_toolbox`:
+
+```bash
+pgrep -af "clearpath_viz"          # find the launch pid (parent of rviz2)
+kill -INT <launch pid>
+setsid nohup bash -c 'source /opt/ros/jazzy/setup.bash && exec ros2 launch \
+  clearpath_viz view_navigation.launch.py namespace:=a200_0000 use_sim_time:=true' \
+  > /tmp/rviz_simtime.log 2>&1 < /dev/null & disown
+ros2 param get /a200_0000/rviz2 use_sim_time
+```
+
+Required: `Boolean value is: True`, and `/tmp/rviz_simtime.log` stops accruing
+`transform cache` warnings after start-up. Measured: exactly one such warning
+during start-up (before the tf cache filled) and none afterwards; the Map
+display loaded (`Trying to create a map of size 507 x 681 using 1 swatches`).
+
+`rviz2` segfaults on `SIGINT` and Ubuntu's apport dumps core for ~10 s before
+the pid disappears — cosmetic, same family as CLAUDE.md gotcha #8. Confirm the
+pid is really gone before relaunching.
+
+### Step 2 — Drive the perimeter loop
+
+One segment per invocation of `tools/drive_segment.py`:
+
+```bash
+python3 -m tools.drive_segment forward 3.0
+python3 -m tools.drive_segment turn_left 1.5708
+python3 -m tools.drive_segment reverse 1.0
+```
+
+Each segment is one bounded `TwistStamped` publication on `/a200_0000/cmd_vel`
+(CLAUDE.md gotcha #3), closed-loop on `platform/odom/filtered` distance or
+accumulated yaw, with `/a200_0000/sensors/lidar2d_0/scan` checked every cycle.
+Parameters for this run: linear `0.5 m/s`, angular `0.4 rad/s` — the tool's
+defaults. No collision monitor runs in this configuration, so the clearance
+abort is the only obstacle protection. Between segments the scan sector minima
+decide the next heading — turn toward the open sector before the forward
+clearance reaches the abort threshold.
+
+The clearance rule is **direction-aware** (`tools/drive_geometry.py`), which is
+a deliberate change from the flat 1.0 m whole-scan rule this run was driven
+with — see the notes after the table:
+
+| mode | region evaluated | threshold |
+|---|---|---|
+| `forward` / `reverse` | the swept corridor: lateral offset within the 0.34 m half-width + 0.10 m margin, on the side being driven toward; distance measured **along track** | 1.00 m |
+| `turn_left` / `turn_right` | the whole scan — an in-place turn sweeps the circumscribed circle in every direction | 0.70 m (rotation radius `hypot(0.495, 0.34)` = 0.600 m + 0.10 m) |
+| any | the whole scan, contact imminent | 0.35 m, vetoes all motion |
+
+The route driven, as `(segment -> resulting odom pose)`:
+
+| # | segment | end odom pose | min range seen |
+|---|---|---|---|
+| 1 | forward 3.0 m | `(5.09, 0.00)` yaw `0.004` | 1.92 |
+| 2 | turn left 1.5708 rad | `(5.13, 0.00)` yaw `1.642` | 2.08 |
+| 3 | forward 4.0 m | `(4.70, 4.07)` yaw `1.675` | 2.77 |
+| 4 | forward 2.5 m | `(4.43, 6.68)` yaw `1.675` | 1.10 |
+| 5 | turn left 1.5708 rad | `(4.43, 6.72)` yaw `-2.970` | 1.44 |
+| 6 | forward 2.0 m | `(2.37, 6.34)` yaw `-2.957` | 1.59 |
+| 7 | forward 3.0 m | `(-0.71, 5.76)` yaw `-2.957` | 1.71 |
+| 8 | forward 4.0 m | `(-4.78, 5.00)` yaw `-2.957` | 2.07 |
+| 9 | forward 3.0 m | `(-7.86, 4.42)` yaw `-2.957` | 1.42 |
+| 10 | turn left 1.5708 rad | `(-7.91, 4.42)` yaw `-1.320` | 2.63 |
+| 11 | forward 5.0 m | **ABORTED at 4.31 m**, `(-6.75, 0.17)` | **1.00** |
+| 12 | reverse 1.0 m (recovery) | `(-7.02, 1.18)` | 1.80 |
+| 13 | turn right 1.5708 rad | `(-7.03, 1.22)` yaw `-2.935` | 2.23 |
+| 14 | turn left 2.079 rad | `(-7.03, 1.22)` yaw `-0.047` | 2.22 |
+| 15 | forward 5.0 m | `(-1.97, 0.91)` yaw `-0.060` | 2.76 |
+| 16 | forward 4.0 m | `(2.16, 0.65)` yaw `-0.059` | 1.10 |
+
+Roughly 35 m driven. Required: no contact with any obstacle, and the run ends
+near the start point. Measured: **no collision and no stall** — the abort at
+segment 11 stopped the robot with an obstacle 0.85 m off the front-right,
+correctly, before contact. Final Gazebo truth pose `(1.655, 0.003)` against the
+start `(1.965, -0.044)` — **0.31 m from the start point**, so `slam_toolbox`
+gets its loop closure. Odom read `(2.16, 0.65)` at the same instant, i.e. ~0.65 m
+of accumulated wheel-odometry drift over the loop, which the map frame absorbs.
+
+Three things this run exposed. The first two were bugs in the driver and are
+fixed in `tools/drive_geometry.py`; the table above is the record of the run as
+driven, so segments 12-14 are artefacts of the old behaviour and a repeat will
+not need them.
+
+- **The flat 1.0 m abort rule strands the robot — fixed.** Once the minimum
+  range over the whole scan was below 1.0 m, every subsequent segment aborted
+  instantly at its first scan check, *including the reverse or turn that would
+  escape*. Segment 12 is a deliberate deviation: a hand-flown reverse at a
+  lowered 0.5 m threshold, purely to get clear again. The rule is now
+  direction-aware — only the region the robot is about to sweep is evaluated —
+  so the 0.85 m front-right obstacle that fired segment 11's abort vetoes
+  driving forward while still permitting reverse and either turn. The
+  omnidirectional veto that remains is 0.35 m, at which being stranded is the
+  correct outcome.
+- **Turns of `pi` or more do not terminate — fixed.** Progress was measured as
+  a shortest-angle difference, which wraps: a commanded 3.1416 rad turn read
+  1.31 rad of progress, timed out, and left the robot at yaw 2.079 having
+  actually rotated ~5.0 rad. Segments 13-14 are the correction that was needed
+  at the time. Progress is now the **unwrapped** accumulated per-sample heading
+  change, so a turn of exactly `pi`, more than `pi`, or several revolutions all
+  terminate at the commanded angle.
+- **The map does not repaint after a pure rotation** — segments 2, 5 and 10 left
+  the known-cell count unchanged. Not a bug; expected of a 360 deg scanner.
+
+### Step 3 — Map growth checkpoints
+
+```bash
+python3 -m tools.check_map_growth
+```
+
+It samples `/a200_0000/map` with **transient-local, reliable** QoS — the latched
+map is not readable with sensor-data QoS and reads as a dead topic — and prints
+grid size, resolution, origin, occupied/free/unknown counts and the known-cell
+bounding box in metres. Known cells are those with value >= 0.
+
+| checkpoint | known cells | occ / free / unk | bbox |
+|---|---|---|---|
+| pre-drive baseline (stationary) | 47 715 | 696 / 47 019 / 297 552 | 25.30 x 31.50 m |
+| after segment 1 | 93 513 | 1 529 / 91 984 / 251 754 | 25.30 x 34.00 m |
+| after segment 3 | 139 855 | 1 999 / 137 856 / 268 064 | 29.95 x 34.00 m |
+| after segment 9 | 202 239 | 4 161 / 198 078 / 335 949 | 30.10 x 37.00 m |
+| after segment 11 (abort) | 212 160 | 4 678 / 207 482 / 357 318 | 30.05 x 37.15 m |
+| after segment 15 | 219 934 | 5 519 / 214 415 / 358 484 | 31.85 x 38.70 m |
+| after segment 16 (final) | 221 736 | 5 341 / 216 395 / 356 434 | 31.80 x 37.20 m |
+
+Stopping rule for this run: stop when the known-cell count grows by less than 5%
+over two consecutive segments. Measured: +2.9% then +0.8% at segments 15 and 16,
+so driving stopped there. Note the last row's occupied count *falls* (5 519 ->
+5 341) and the bbox shrinks — that is the loop closure re-optimising the graph
+and retracting spurious cells, which is the desired outcome, not a loss.
+
+### Step 4 — Save the map
+
+```bash
+ros2 run nav2_map_server map_saver_cli \
+  -f /home/thinhpham/Documents/Husky_viz/maps/warehouse_slam_map \
+  --ros-args -r map:=/a200_0000/map
+```
+
+Required: `Map saved successfully`, and both files present in `maps/` (project
+convention — not a home directory). Measured:
+
+```
+image: warehouse_slam_map.pgm
+mode: trinary
+resolution: 0.050
+origin: [-17.265, -19.794, 0]
+negate: 0
+occupied_thresh: 0.65
+free_thresh: 0.196
+```
+
+646 x 895 px @ 0.05 m/pix. Saved-image histogram, which must match the live
+sample above exactly: **occupied (0) 5 341, free (254) 216 395, unknown (205)
+356 434**.
+
+### Step 5 — Localize on the saved map and navigate to a goal
+
+Brings up AMCL against the map saved in Step 4, then the nav2 stack, then sends
+one goal. Both launches need `setup_path` — its default `/etc/clearpath/` does
+not exist on this machine and the launch fails on it.
+
+**Ordering is mandatory: stop `slam_toolbox` FIRST, and verify it stopped.**
+`slam_toolbox` and AMCL both publish `map -> odom`. Two publishers on one
+transform do not error, do not warn, and are not rejected — the transform simply
+flickers between two answers at whatever rate each publishes, and every
+consumer (costmaps, the controller, RViz) silently reads a pose that jumps.
+This is the failure family of CLAUDE.md gotcha #7: a second publisher on a topic
+the stack already owns, producing wrong behaviour with a clean log.
+
+```bash
+pgrep -af "slam_toolbox"                 # find the launch pid (parent of the node)
+kill -INT <launch pid>
+pgrep -af "slam_toolbox"                 # required: prints nothing
+ros2 topic info -v /a200_0000/tf | grep -c "map"   # map -> odom must have stopped
+```
+
+Do not stop Gazebo and do not stop RViz.
+
+```bash
+setsid nohup bash -c 'source /opt/ros/jazzy/setup.bash && exec ros2 launch \
+  clearpath_nav2_demos localization.launch.py use_sim_time:=true \
+  setup_path:=/home/thinhpham/clearpath/ \
+  map:=/home/thinhpham/Documents/Husky_viz/maps/warehouse_slam_map.yaml' \
+  > /tmp/localization.log 2>&1 < /dev/null & disown
+
+setsid nohup bash -c 'source /opt/ros/jazzy/setup.bash && exec ros2 launch \
+  clearpath_nav2_demos nav2.launch.py use_sim_time:=true \
+  setup_path:=/home/thinhpham/clearpath/' \
+  > /tmp/nav2.log 2>&1 < /dev/null & disown
+```
+
+`setsid nohup ... & disown` is required, not decorative — a plain `nohup ... &`
+stays in the caller's process group and an interrupt reaches Gazebo (gotcha #22).
+
+**Seed AMCL's initial pose.** AMCL starts with no estimate and will not converge
+from a driven map on its own; it comes up healthy and useless, the same shape as
+gotcha #34. Read the robot's true pose from Gazebo and publish it once on
+`/a200_0000/initialpose` (`geometry_msgs/PoseWithCovarianceStamped`, frame
+`map`; `-t 1` exits cleanly, unlike killing a `ros2` CLI under `timeout` —
+gotcha #8):
+
+```bash
+gz model -m a200_0000/robot -p          # truth pose, for the values below
+ros2 topic pub -t 1 /a200_0000/initialpose \
+  geometry_msgs/msg/PoseWithCovarianceStamped \
+  '{header: {frame_id: "map"},
+    pose: {pose: {position: {x: 1.655150, y: 0.002513, z: 0.0},
+                  orientation: {z: -0.130368, w: 0.991467}},
+           covariance: [0.25,0,0,0,0,0, 0,0.25,0,0,0,0, 0,0,0,0,0,0,
+                        0,0,0,0,0,0, 0,0,0,0,0,0, 0,0,0,0,0,0.0685]}}'
+```
+
+The orientation above is yaw `-0.261389` rad as a quaternion. Substitute the
+truth pose your own run reports; these are the values from 2026-08-31.
+
+**Gate 1 — AMCL is publishing `map -> odom`.**
+
+```bash
+ros2 topic info -v /a200_0000/amcl_pose | grep -A1 "Publisher count"
+```
+
+Required: `Publisher count: 1`. A topic listing alone proves nothing here
+(gotcha #38).
+
+**Gate 2 — AMCL agrees with truth at rest.**
+
+```bash
+python3 -m tools.check_amcl_error --world warehouse
+```
+
+Measured: **0.017 m** position error at rest. The map frame coincides with the
+Gazebo world frame in this run because the map was built from this spawn and
+AMCL was seeded from truth, which is what makes the direct comparison valid.
+
+**Gate 3 — AMCL holds up while driving.**
+
+```bash
+python3 -m tools.drive_segment forward 3.0
+python3 -m tools.drive_segment forward 3.0
+python3 -m tools.check_amcl_error --world warehouse
+```
+
+Measured after a **6.73 m** run: position error **0.059 m**, yaw error grown to
+**10.4 deg**. The position error staying small while yaw degrades is the
+expected signature of a particle filter on a corridor-like map — it is well
+constrained across the corridor and poorly constrained in heading.
+
+**Gate 4 — nav2 drives to a goal.**
+
+```bash
+python3 -m tools.send_nav_goal -5.00 1.00
+```
+
+Required: `accepted: yes`, result `SUCCEEDED`, and a final position error inside
+nav2's `xy_goal_tolerance`. Measured: **SUCCEEDED in 31.9 s**, final position
+error **0.102 m**, and the minimum lidar range seen during the run **1.00 m** —
+i.e. it kept a metre of clearance from the shelving it passed.
+
+A rejected goal or an immediate `ABORTED` almost always means `map -> odom` is
+absent or contested — go back and re-check that `slam_toolbox` is really gone.
+
+### Cleanup
+
+None during Steps 1-4 — the sim, `slam_toolbox` and RViz are left running
+deliberately, since the pose graph is only in memory and a restart discards it.
+Once Step 4 has saved the map that no longer applies, and Step 5 replaces
+`slam_toolbox` with AMCL. Tear down with `CLEAN_SIM.md` when finished.
+
+### Provenance of the numbers
+
+Steps 2 and 3 were originally executed by two throwaway scratchpad scripts. They
+now live in `tools/drive_segment.py` (with `tools/drive_geometry.py` holding its
+ROS-free decision logic, unit-tested in `tests/test_drive_geometry.py`) and
+`tools/check_map_growth.py`. Every number in the tables above is measured from
+the original run under the *old* flat clearance rule and the wrapped turn
+progress, so segments 11-14 in particular will not reproduce identically — the
+totals (~35 m driven, 221 736 known cells, 0.31 m from the start) are what to
+compare against.
+
+---
+
 ## Adding a demo
 
 Copy the block below and fill it in. Keep it executable: commands only, with
