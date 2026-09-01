@@ -460,10 +460,24 @@ setsid nohup bash -c 'source /opt/ros/jazzy/setup.bash && exec ros2 launch \
   > /tmp/localization.log 2>&1 < /dev/null & disown
 
 setsid nohup bash -c 'source /opt/ros/jazzy/setup.bash && exec ros2 launch \
-  clearpath_nav2_demos nav2.launch.py use_sim_time:=true \
-  setup_path:=/home/thinhpham/clearpath/' \
+  /home/thinhpham/Documents/Husky_viz/launch/nav2_warehouse.launch.py \
+  use_sim_time:=true setup_path:=/home/thinhpham/clearpath/' \
   > /tmp/nav2.log 2>&1 < /dev/null & disown
 ```
+
+**Use the repo's `launch/nav2_warehouse.launch.py`, not
+`clearpath_nav2_demos nav2.launch.py`.** The stock a200 config
+(`.../config/a200/nav2.yaml:181-183`) sets `rolling_window: true`, `width: 20`,
+`height: 20` on the **global** costmap, so it is a 20 x 20 m window that follows
+the robot rather than a costmap fixed in `map`. Measured live on
+`/a200_0000/global_costmap/costmap`: `333 x 333 @ 0.06 m = 20.0 x 20.0 m`,
+origin `(-6.66, -19.26)`, moving with the robot — while the saved map is
+`646 x 895 @ 0.05 m = 32.3 x 44.75 m`. A goal outside that window is simply not
+in the costmap, so the planner cannot route to it and navigation only reaches
+goals within ~10 m. (`allow_unknown: true` is already set, so unmapped space is
+not the blocker.) The stock launch file hardcodes its parameter file and offers
+no override, hence the fork; `config/nav2_warehouse.yaml` documents its three
+deviations in its header.
 
 `setsid nohup ... & disown` is required, not decorative — a plain `nohup ... &`
 stays in the caller's process group and an interrupt reaches Gazebo (gotcha #22).
