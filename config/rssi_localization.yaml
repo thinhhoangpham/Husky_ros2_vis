@@ -1,0 +1,104 @@
+# config/rssi_localization.yaml
+#
+# Global localization from RSSI trilateration: map -> odom only.
+#
+# The RSSI sibling of config/gps_localization.yaml. Everything that file says
+# about the division of labour still holds: the Clearpath-generated ekf_node
+# (~/clearpath/platform/config/localization.yaml) keeps sole ownership of
+# odom -> base_link and is never edited, while THIS ekf_node_map owns
+# map -> odom and is the only publisher of that edge.
+#
+# There is no navsat_transform_node here. The absolute position measurement
+# arrives directly as a geometry_msgs/PoseWithCovarianceStamped from
+# tools/rssi_localization_node.py, already in map-frame metres - trilateration
+# solves in the world/map frame from surveyed tower coordinates, so there is no
+# geodetic conversion stage to run. launch/rssi_localization.launch.py must
+# therefore NOT start navsat_transform_node: two sources feeding map -> odom
+# would mean two publishers of that edge.
+#
+# Differences from the GPS version, and only these:
+#   * navsat_transform_node block removed entirely (no geodetic stage).
+#   * odom1 (odometry/gps) replaced by pose0 (rssi/pose), x and y only.
+# The imu0 and odom0 fusion below is copied unchanged from the GPS version -
+# the local dead-reckoning and heading problem is identical, only the absolute
+# position source differs.
+a200_0000:
+  ekf_node_map:
+    ros__parameters:
+      use_sim_time: true
+      # 50 Hz matches the GPS version; see config/gps_localization.yaml for
+      # why 10 Hz was rejected. The RSSI pose arrives at only ~1 Hz, so the
+      # filter runs mostly on prediction plus odom0/imu0 between fixes -
+      # which is exactly the regime this rate was chosen for.
+      frequency: 50.0
+      two_d_mode: true               # park is flat to 3.5 mm
+      predict_to_current_time: true
+      publish_tf: true
+      print_diagnostics: true
+      map_frame: map
+      odom_frame: odom
+      base_link_frame: base_link
+      world_frame: map               # <- publishes map -> odom
+
+      # Wheel odometry as VELOCITY ONLY, never position - identical to the
+      # GPS version. Skid-steer wheel odometry over-counted distance by 46% in
+      # a measured curved approach, so only vx, vy, vyaw (indices 6, 7, 11)
+      # are fused (two_d_mode is true so vz is excluded). pose0 below is the
+      # sole position source in the map frame. This matters more here than
+      # under GPS: the absolute fix is ~1 Hz, so odom0 carries the estimate
+      # across a full second between corrections.
+      odom0: platform/odom
+      odom0_config: [false, false, false,
+                     false, false, false,
+                     true,  true,  false,
+                     false, false, true,
+                     false, false, false]
+      odom0_differential: false
+      odom0_queue_size: 10
+
+      # imu0 supplies absolute map-frame yaw (index 5) and yaw rate (index
+      # 11), unchanged from the GPS version. It is the ONLY heading source in
+      # this configuration - RSSI ranges carry no orientation information at
+      # all - so it is not optional here.
+      # sensors/imu_enu/data, not sensors/imu_0/data: imu_enu is ENU-referenced
+      # and park.sdf is heading_deg 0, so its yaw is already a map heading.
+      # Stock imu_0 declares no <orientation_reference_frame> and gz-sim
+      # references it to the sensor's INITIAL pose, which is meaningless as an
+      # absolute map heading.
+      imu0: sensors/imu_enu/data
+      imu0_config: [false, false, false,
+                    false, false, true,
+                    false, false, false,
+                    false, false, true,
+                    false, false, false]
+      imu0_differential: false
+      imu0_queue_size: 10
+      imu0_remove_gravitational_acceleration: true
+
+      # The RSSI fix. X AND Y ONLY (indices 0 and 1).
+      #
+      # Every other index is false on purpose. The published orientation is
+      # the identity quaternion because trilateration from ranges cannot
+      # observe yaw; fusing it would be fusing a fabricated heading of 0 rad
+      # and would corrupt the filter's yaw (and through it every subsequent
+      # position prediction). The node also gives orientation a 1e6 covariance
+      # as a second line of defence, but this config is the primary one - do
+      # not turn indices 3-5 on here.
+      #
+      # z (index 2) is off too: the pose carries a surveyed constant height,
+      # not a measurement, and two_d_mode already excludes it.
+      #
+      # pose0, not odom0/odom1: robot_localization keys inputs by TYPE, and
+      # this is a PoseWithCovarianceStamped, so it belongs to the poseN
+      # family. It is index 0 of that family - the odomN indices above are a
+      # separate sequence and do not consume it. Like odomN, poseN inputs are
+      # loaded by consecutive index from 0 and loading stops at the first gap.
+      pose0: rssi/pose
+      pose0_config: [true,  true,  false,
+                     false, false, false,
+                     false, false, false,
+                     false, false, false,
+                     false, false, false]
+      pose0_differential: false
+      pose0_relative: false
+      pose0_queue_size: 10
