@@ -1,7 +1,12 @@
 <?xml version="1.0"?>
 <!-- RF comms endpoint for the A200. Model-level plugin (no 'reference'
      attribute), so it attaches to the robot model rather than a link.
-     Received packets are published on the gz topic <address>/rx. -->
+     Received packets are published on the gz topic <address>/rx.
+
+     Shared file: included by BOTH urdf/extras.urdf.xacro (robot_full.yaml)
+     and urdf/extras_radio.urdf.xacro (robot_radio.yaml). Editing the address
+     or topic here changes both configs - keep scripts/run_husky_sim.sh's
+     bridge lines (~123-125) and tools/check_radio.py in sync. -->
 <robot xmlns:xacro="http://ros.org/wiki/xacro">
   <gazebo>
     <plugin filename="libgz-sim-comms-endpoint-system.so"

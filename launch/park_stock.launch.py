@@ -59,6 +59,24 @@ What is project code, and why upstream cannot supply it
      declaring it as a stock `imu_1` would also make the generator fuse it into
      the *local* EKF, double-counting yaw rate on odom -> base_link.
 
+     The radio topics get an explicit ros_gz_bridge too, for the same reason
+     and only under `localization:=rssi`. tools/rssi_localization_node.py
+     pings the towers on /broker/msgs (ROS -> gz) and reads the robot's
+     replies on /husky/rx (gz -> ROS); nothing else in this chain bridges
+     them, so without it the node subscribes to a topic with no publisher and
+     silently never solves (gotcha #34's family). Only those two topics are
+     bridged: the node reads no other rx topic, and the compass is not part of
+     this backend - config/rssi_localization.yaml fuses only `rssi/pose` and
+     `imu_enu`. Both names are GLOBAL, not `a200_0000`-scoped; the gz side
+     fixes them. The `gps` backend needs none of this, so the bridge is not
+     started for it.
+
+     PREREQUISITE: a robot config that declares the radio.
+     robot_configs/robot_default.yaml - the config the stock chain documents
+     applying - has none, so the bridge would carry nothing. Use
+     robot_configs/robot_radio.yaml (extras_radio.urdf.xacro ->
+     comms.urdf.xacro), and a world carrying the RFComms system (park.sdf:17).
+
   3. Stage 3, nav2 with our params (ruling D2).
      clearpath_nav2_demos/launch/nav2.launch.py declares only use_sim_time,
      setup_path and scan_topic and hardcodes its params to
@@ -412,6 +430,27 @@ def generate_launch_description() -> LaunchDescription:
             parameters=[{"use_sim_time": use_sim_time}],
         )
 
+    def radio_bridge():
+        """The RF comms bridge - rssi backend only, see the docstring.
+
+        Global topic names, deliberately not under NAMESPACE. `]` is
+        ROS -> gz (the outbound ping), `[` is gz -> ROS (the reply); a
+        reversed marker gives a bridge that advertises and carries nothing.
+        The condition rides on this Node directly - no GroupAction here.
+        """
+        return Node(
+            package="ros_gz_bridge",
+            executable="parameter_bridge",
+            name="radio_gz_bridge",
+            output="screen",
+            arguments=[
+                "/broker/msgs@ros_gz_interfaces/msg/Dataframe]gz.msgs.Dataframe",
+                "/husky/rx@ros_gz_interfaces/msg/Dataframe[gz.msgs.Dataframe",
+            ],
+            parameters=[{"use_sim_time": use_sim_time}],
+            condition=backend("rssi"),
+        )
+
     def ekf_node_map(config):
         """The single map -> odom publisher. Never a second one."""
         return Node(
@@ -490,6 +529,10 @@ def generate_launch_description() -> LaunchDescription:
                 ),
                 ekf_node_map(GPS_CONFIG),
             ], condition=backend("gps")),
+
+            # The RF comms bridge the rssi backend measures through.
+            # Conditioned on the Node itself, so it adds no GroupAction.
+            radio_bridge(),
 
             # Stage 1b - RSSI. Same contract, no geodetic stage: trilateration
             # solves directly in map metres from surveyed tower coordinates, so

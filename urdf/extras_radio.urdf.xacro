@@ -1,0 +1,7 @@
+<?xml version="1.0"?>
+<!-- Aggregates robot_radio.yaml's platform.extras.urdf additions:
+     the shared default set plus the RF comms endpoint. -->
+<robot xmlns:xacro="http://ros.org/wiki/xacro">
+  <xacro:include filename="/home/thinhpham/Documents/Husky_viz/urdf/extras_default.urdf.xacro"/>
+  <xacro:include filename="/home/thinhpham/Documents/Husky_viz/urdf/comms.urdf.xacro"/>
+</robot>
