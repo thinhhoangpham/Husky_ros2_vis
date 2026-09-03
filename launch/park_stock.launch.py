@@ -71,6 +71,26 @@ What is project code, and why upstream cannot supply it
      fixes them. The `gps` backend needs none of this, so the bridge is not
      started for it.
 
+     tools/rssi_viz.py starts alongside them, under `localization:=rssi`
+     only, and is the visualisation of that same measurement: it pings the
+     towers itself and publishes a visualization_msgs/MarkerArray on
+     /a200_0000/rssi_viz (towers, live links, the trilaterated fix against
+     ground truth). It is started as a bare Node with NO namespace and NO
+     TF remaps on purpose - the script injects its own
+     /tf:=/a200_0000/tf remaps when the caller supplies neither a TF remap
+     nor `__ns:=`, and passing either from here would suppress that and
+     leave its TransformListener bound to a global /tf nothing publishes.
+     Only `use_sim_time` is passed; --rate keeps the script's own 1.0 Hz
+     default. Its markers are shown by ADDING one MarkerArray display to
+     the stock nav2 view, not by running a different viewer: the stock
+     clearpath_viz view_navigation.launch.py is always the thing that starts
+     rviz, and under `rssi` it is handed config/nav2_rssi.rviz - a verbatim
+     copy of stock nav2.rviz plus that one display, so all seven stock Tools
+     (SetInitialPose, PublishPoint, nav2_rviz_plugins/GoalTool included)
+     remain. Standing rule for this file: the stock launchers are ADDED TO,
+     never replaced by a project equivalent. Exactly one rviz starts either
+     way, and `rviz:=false` starts none.
+
      PREREQUISITE: a robot config that declares the radio.
      robot_configs/robot_default.yaml - the config the stock chain documents
      applying - has none, so the bridge would carry nothing. Use
@@ -307,6 +327,15 @@ PARK_SPAWN = {"x": "45.64", "y": "0.02", "z": "3.3", "yaw": "2.6132"}
 GPS_CONFIG = os.path.join(REPO, "config", "gps_localization.yaml")
 RSSI_CONFIG = os.path.join(REPO, "config", "rssi_localization.yaml")
 RSSI_NODE = os.path.join(REPO, "tools", "rssi_localization_node.py")
+RSSI_VIZ_NODE = os.path.join(REPO, "tools", "rssi_viz.py")
+# Stock clearpath_viz nav2.rviz plus one MarkerArray display for
+# /a200_0000/rssi_viz - added to, not replacing it, so every stock display
+# and all seven stock Tools (SetInitialPose, PublishPoint and
+# nav2_rviz_plugins/GoalTool among them) survive. Absolute on purpose:
+# view_navigation.launch.py:66 builds PathJoinSubstitution([<pkg>/rviz,
+# config]), and an absolute second component makes the join yield that path
+# unchanged - so the stock launcher serves our config with no fork.
+NAV2_RSSI_RVIZ = os.path.join(REPO, "config", "nav2_rssi.rviz")
 MAP_CONFIG = os.path.join(REPO, "config", "map_server.yaml")
 NAV2_CONFIG = os.path.join(REPO, "config", "nav2_park.yaml")
 
@@ -451,6 +480,27 @@ def generate_launch_description() -> LaunchDescription:
             condition=backend("rssi"),
         )
 
+    def rssi_viz():
+        """The RSSI marker publisher - rssi backend only, see the docstring.
+
+        Started exactly like rssi_localization_node.py (absolute `executable`;
+        tools/ is not an ament package), but deliberately WITHOUT `namespace`
+        and without TF_REMAPS: the script supplies its own
+        /tf:=/a200_0000/tf remaps unless the caller passed a TF remap or a
+        `__ns:=`, and launch_ros emits `-r __ns:=...` for `namespace`, which
+        would suppress them. Its topics (/broker/msgs, /husky/rx,
+        /a200_0000/rssi_viz) are all absolute already, so the namespace buys
+        nothing. It publishes no TF. The condition rides on this Node
+        directly - no GroupAction here.
+        """
+        return Node(
+            executable=RSSI_VIZ_NODE,
+            name="rssi_viz",
+            output="screen",
+            parameters=[{"use_sim_time": use_sim_time}],
+            condition=backend("rssi"),
+        )
+
     def ekf_node_map(config):
         """The single map -> odom publisher. Never a second one."""
         return Node(
@@ -533,6 +583,9 @@ def generate_launch_description() -> LaunchDescription:
             # The RF comms bridge the rssi backend measures through.
             # Conditioned on the Node itself, so it adds no GroupAction.
             radio_bridge(),
+
+            # The live marker view of that same measurement, same condition.
+            rssi_viz(),
 
             # Stage 1b - RSSI. Same contract, no geodetic stage: trilateration
             # solves directly in map metres from surveyed tower coordinates, so
@@ -678,7 +731,11 @@ def generate_launch_description() -> LaunchDescription:
                                           "already up (scripts/sim.py)"),
         DeclareLaunchArgument("rviz", default_value="true",
                               choices=["true", "false"],
-                              description="start the stock nav2 rviz view"),
+                              description="start the rviz view (the stock "
+                                          "nav2 view; under localization:=rssi "
+                                          "the same view with the RSSI "
+                                          "MarkerArray display added, "
+                                          "config/nav2_rssi.rviz)"),
     ] + [
         DeclareLaunchArgument(element, default_value=default,
                               description=f"{element} of the robot spawn pose "
@@ -728,11 +785,38 @@ def generate_launch_description() -> LaunchDescription:
         GroupAction(navigation_stages(),
                     condition=UnlessCondition(world_and_robot)),
 
-        # Stock view. It does its own PushRosNamespace and /tf remaps, so it
-        # needs no help from here beyond the namespace. Not gated: rviz is
+        # The rviz view: always the stock launcher, never a substitute for
+        # it. Only the CONFIG it is handed varies by backend - `rssi` gets
+        # config/nav2_rssi.rviz (stock nav2.rviz plus the RSSI MarkerArray),
+        # anything else gets stock's own default file name. Standing rule:
+        # add to the stock chain, never switch away from it. An earlier
+        # revision started a bare rviz2 Node under `rssi` instead of this
+        # include and silently lost three stock tools with it, GoalTool - the
+        # click-to-set-goal button - among them.
+        #
+        # Two SetLaunchConfiguration actions rather than one include per
+        # backend, so there is exactly one rviz action in this file: they are
+        # mutually exclusive by construction (EqualsSubstitution on
+        # `localization` and its negation), so `rviz_config` is written
+        # exactly once and `rviz:=true` starts exactly one window,
+        # `rviz:=false` none. Conditions ride on the actions themselves; no
+        # GroupAction.
+        SetLaunchConfiguration(
+            "rviz_config", NAV2_RSSI_RVIZ,
+            condition=IfCondition(EqualsSubstitution(localization, "rssi"))),
+        SetLaunchConfiguration(
+            # view_navigation.launch.py:62 declares this same string as its
+            # default, so this branch is stock behaviour written out.
+            "rviz_config", "nav2.rviz",
+            condition=UnlessCondition(
+                EqualsSubstitution(localization, "rssi"))),
+
+        # It does its own PushRosNamespace and /tf remaps, so it needs no help
+        # from here beyond the namespace. Not gated on readiness: rviz is
         # content to wait for topics and shows the world coming up.
         stock(pkg_clearpath_viz, "view_navigation.launch.py", {
             "namespace": NAMESPACE,
             "use_sim_time": use_sim_time,
+            "config": LaunchConfiguration("rviz_config"),
         }, condition=IfCondition(LaunchConfiguration("nav_rviz"))),
     ])
