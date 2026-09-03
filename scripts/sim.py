@@ -60,7 +60,12 @@ EXTRA_SWEEP = ["a200_0000", "gz sim", "gz_tools_vendor"]
 
 
 def parse_kill_patterns(kill_sim_text: str) -> list[str]:
-    m = re.search(r"PATTERNS=\((.*?)\)", kill_sim_text, re.S)
+    # The closing paren is anchored to column 0 (re.M) because the array body
+    # contains parens inside comments - e.g. "(launch/park_stock.launch.py)".
+    # A bare non-greedy `\)` stopped there and returned 18 of 34 patterns,
+    # hiding every nav2/localization name from both the kill and the survivor
+    # check. re.S lets `.` span lines; re.M makes `^` match line starts.
+    m = re.search(r"PATTERNS=\((.*?)^\)", kill_sim_text, re.S | re.M)
     if not m:
         raise ValueError("no PATTERNS=( ... ) array in kill_sim.sh")
     out = []

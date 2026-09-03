@@ -26,6 +26,21 @@ PATTERNS=(
   "urg_node"
   "velodyne"
   "rviz2"
+  # RSSI localization stage - tools/rssi_viz.py and
+  # tools/rssi_localization_node.py. Both are started by absolute script
+  # path because tools/ is not an ament package, so the path is what shows
+  # up on the command line and is what has to be matched. rssi_viz carries
+  # no launch_ros `namespace`, so its command line contains no "a200_0000"
+  # and sim.py's EXTRA_SWEEP never reached it - it survived a "CLEAN" stop.
+  # rssi_localization_node only died because its `namespace` puts
+  # "-r __ns:=/a200_0000" on its command line, which is incidental, so it is
+  # listed explicitly too. See CLAUDE.md #21.
+  # NOTE: these must stay ABOVE the nav2 block below. sim.py's
+  # parse_kill_patterns stops at the first closing-parenthesis character
+  # anywhere in this array, and that block's comment contains one, so every
+  # entry after it is invisible to sim.py.
+  "tools/rssi_viz.py"
+  "tools/rssi_localization_node.py"
   # nav2 + GPS localization stack (launch/park_stock.launch.py) - see CLAUDE.md #21
   "navsat_transform_node"
   "ekf_node_map"

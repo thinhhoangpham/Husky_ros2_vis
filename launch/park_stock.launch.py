@@ -84,10 +84,20 @@ What is project code, and why upstream cannot supply it
      default. Its markers are shown by ADDING one MarkerArray display to
      the stock nav2 view, not by running a different viewer: the stock
      clearpath_viz view_navigation.launch.py is always the thing that starts
-     rviz, and under `rssi` it is handed config/nav2_rssi.rviz - a verbatim
-     copy of stock nav2.rviz plus that one display, so all seven stock Tools
+     rviz, and it is handed config/nav2_park.rviz - a verbatim copy of stock
+     nav2.rviz plus exactly two displays, so all seven stock Tools
      (SetInitialPose, PublishPoint, nav2_rviz_plugins/GoalTool included)
-     remain. Standing rule for this file: the stock launchers are ADDED TO,
+     remain:
+
+       PointCloud2  sensors/lidar3d_0/points   stock ships no 3D lidar
+                                               display at all - its two
+                                               PointCloud displays are
+                                               costmap voxel clouds
+       MarkerArray  /a200_0000/rssi_viz        this stage's output
+
+     That one config serves BOTH backends, so the pointcloud is there under
+     `gps` too; the RSSI display just has no publisher there and draws
+     nothing. Standing rule for this file: the stock launchers are ADDED TO,
      never replaced by a project equivalent. Exactly one rviz starts either
      way, and `rviz:=false` starts none.
 
@@ -328,14 +338,19 @@ GPS_CONFIG = os.path.join(REPO, "config", "gps_localization.yaml")
 RSSI_CONFIG = os.path.join(REPO, "config", "rssi_localization.yaml")
 RSSI_NODE = os.path.join(REPO, "tools", "rssi_localization_node.py")
 RSSI_VIZ_NODE = os.path.join(REPO, "tools", "rssi_viz.py")
-# Stock clearpath_viz nav2.rviz plus one MarkerArray display for
-# /a200_0000/rssi_viz - added to, not replacing it, so every stock display
-# and all seven stock Tools (SetInitialPose, PublishPoint and
-# nav2_rviz_plugins/GoalTool among them) survive. Absolute on purpose:
+# Stock clearpath_viz nav2.rviz plus exactly two added displays: a
+# PointCloud2 for the 3D lidar (sensors/lidar3d_0/points - stock ships none,
+# its two PointCloud displays are costmap voxel_marked_cloud markers) and a
+# MarkerArray for /a200_0000/rssi_viz. Added to, not replacing it, so every
+# stock display and all seven stock Tools (SetInitialPose, PublishPoint and
+# nav2_rviz_plugins/GoalTool among them) survive. Served to BOTH
+# localization backends: under `gps` the RSSI MarkerArray simply has no
+# publisher and draws nothing, which costs nothing and keeps the pointcloud
+# on the GPS path too. Absolute on purpose:
 # view_navigation.launch.py:66 builds PathJoinSubstitution([<pkg>/rviz,
 # config]), and an absolute second component makes the join yield that path
 # unchanged - so the stock launcher serves our config with no fork.
-NAV2_RSSI_RVIZ = os.path.join(REPO, "config", "nav2_rssi.rviz")
+NAV2_PARK_RVIZ = os.path.join(REPO, "config", "nav2_park.rviz")
 MAP_CONFIG = os.path.join(REPO, "config", "map_server.yaml")
 NAV2_CONFIG = os.path.join(REPO, "config", "nav2_park.yaml")
 
@@ -732,10 +747,10 @@ def generate_launch_description() -> LaunchDescription:
         DeclareLaunchArgument("rviz", default_value="true",
                               choices=["true", "false"],
                               description="start the rviz view (the stock "
-                                          "nav2 view; under localization:=rssi "
-                                          "the same view with the RSSI "
-                                          "MarkerArray display added, "
-                                          "config/nav2_rssi.rviz)"),
+                                          "nav2 view plus a 3D lidar "
+                                          "PointCloud2 and the RSSI "
+                                          "MarkerArray, "
+                                          "config/nav2_park.rviz)"),
     ] + [
         DeclareLaunchArgument(element, default_value=default,
                               description=f"{element} of the robot spawn pose "
@@ -786,37 +801,26 @@ def generate_launch_description() -> LaunchDescription:
                     condition=UnlessCondition(world_and_robot)),
 
         # The rviz view: always the stock launcher, never a substitute for
-        # it. Only the CONFIG it is handed varies by backend - `rssi` gets
-        # config/nav2_rssi.rviz (stock nav2.rviz plus the RSSI MarkerArray),
-        # anything else gets stock's own default file name. Standing rule:
-        # add to the stock chain, never switch away from it. An earlier
-        # revision started a bare rviz2 Node under `rssi` instead of this
-        # include and silently lost three stock tools with it, GoalTool - the
+        # it. The only deviation is the CONFIG it is handed -
+        # config/nav2_park.rviz, stock nav2.rviz plus the 3D lidar
+        # PointCloud2 and the RSSI MarkerArray. Standing rule: add to the
+        # stock chain, never switch away from it. An earlier revision
+        # started a bare rviz2 Node under `rssi` instead of this include and
+        # silently lost three stock tools with it, GoalTool - the
         # click-to-set-goal button - among them.
         #
-        # Two SetLaunchConfiguration actions rather than one include per
-        # backend, so there is exactly one rviz action in this file: they are
-        # mutually exclusive by construction (EqualsSubstitution on
-        # `localization` and its negation), so `rviz_config` is written
-        # exactly once and `rviz:=true` starts exactly one window,
-        # `rviz:=false` none. Conditions ride on the actions themselves; no
-        # GroupAction.
-        SetLaunchConfiguration(
-            "rviz_config", NAV2_RSSI_RVIZ,
-            condition=IfCondition(EqualsSubstitution(localization, "rssi"))),
-        SetLaunchConfiguration(
-            # view_navigation.launch.py:62 declares this same string as its
-            # default, so this branch is stock behaviour written out.
-            "rviz_config", "nav2.rviz",
-            condition=UnlessCondition(
-                EqualsSubstitution(localization, "rssi"))),
-
+        # One config for both backends, so the pointcloud is present under
+        # `gps` as well; the RSSI display is harmlessly empty there. That
+        # leaves a single unconditional rviz action in this file, so
+        # `rviz:=true` starts exactly one window and `rviz:=false` none.
+        # The condition rides on the action itself; no GroupAction.
+        #
         # It does its own PushRosNamespace and /tf remaps, so it needs no help
         # from here beyond the namespace. Not gated on readiness: rviz is
         # content to wait for topics and shows the world coming up.
         stock(pkg_clearpath_viz, "view_navigation.launch.py", {
             "namespace": NAMESPACE,
             "use_sim_time": use_sim_time,
-            "config": LaunchConfiguration("rviz_config"),
+            "config": NAV2_PARK_RVIZ,
         }, condition=IfCondition(LaunchConfiguration("nav_rviz"))),
     ])
