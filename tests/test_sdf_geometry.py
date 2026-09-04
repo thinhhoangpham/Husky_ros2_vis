@@ -61,7 +61,11 @@ def test_world_triangles_terrain_matches_measured_extent():
 
 
 def test_world_triangles_covers_every_model_with_collision():
-    names = [name for name, _ in world_triangles(SDF, skip_models=set())]
+    # Filter to entries that actually carry triangles: world_triangles yields a
+    # model with no <collision> as an empty (0, 3, 3) array, so an unfiltered
+    # count measures models, not collision geometry. park's four base_station
+    # RFComms towers are visual + plugin only and are the reason this matters.
+    names = [name for name, T in world_triangles(SDF, skip_models=set()) if len(T)]
     assert len(names) == 97
     assert "parque" in names
     assert sum(1 for n in names if n.startswith("tree_8")) == 23
@@ -78,7 +82,10 @@ def test_models_using_mesh_dir_finds_the_small_trees():
 
 
 def test_skip_models_is_honoured():
-    names = [n for n, _ in world_triangles(SDF, skip_models={"parque", "camino_parque"})]
+    # Same deliberate filter as above: collision-less models are yielded as
+    # empty arrays, so counting them would measure models, not collision
+    # geometry, and any visual-only model added to the world would perturb it.
+    names = [n for n, T in world_triangles(SDF, skip_models={"parque", "camino_parque"}) if len(T)]
     assert "parque" not in names
     assert "camino_parque" not in names
     assert len(names) == 95

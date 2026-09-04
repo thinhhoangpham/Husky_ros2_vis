@@ -9431,6 +9431,89 @@
     </model>
 
     <!-- Fixed radio base station: open lawn at (11, 10), 7.6 m clear of the
-         nearest park model and 14.9 m from the robot spawn at the origin. -->
+         nearest park model and 36.1 m from the robot spawn at (45.64, 0.02),
+         within the 50 m RFComms max_range. Visual-only, no collision,
+         matching worlds/warehouse_ext.sdf. -->
+    <model name="base_station">
+      <static>true</static>
+      <pose>11 10 3.99 0 0 0</pose>
+      <link name="link">
+        <inertial><mass>1.0</mass>
+          <inertia><ixx>0.1</ixx><iyy>0.1</iyy><izz>0.1</izz></inertia>
+        </inertial>
+        <visual name="visual">
+          <geometry><cylinder><radius>0.1</radius><length>2.0</length></cylinder></geometry>
+        </visual>
+      </link>
+      <plugin filename="libgz-sim-comms-endpoint-system.so"
+              name="gz::sim::systems::CommsEndpoint">
+        <address>base_station</address>
+        <topic>base_station/rx</topic>
+      </plugin>
+    </model>
+
+    <!-- Three more fixed radio base stations completing a four-tower layout:
+         base_station_1/_2/_3 south and west of the first, so at least 3 of
+         the 4 keep every point of routes/park_route_1.yaml (and spawn) within
+         the 50 m RFComms max_range. base_station_1/_3 sit south of y=0 on
+         purpose, because route 1 runs a near-straight corridor along y~0, so
+         towers on one side alone would be nearly collinear with it and give
+         poor trilateration. z=3.99 sets each 2.0 m cylinder's base flush
+         with park's terrain (z ~2.99); all four fall well inside the
+         terrain's x +/-49.8, y -26.5..23.3 extent. -->
+    <model name="base_station_1">
+      <static>true</static>
+      <pose>11 -12 3.99 0 0 0</pose>
+      <link name="link">
+        <inertial><mass>1.0</mass>
+          <inertia><ixx>0.1</ixx><iyy>0.1</iyy><izz>0.1</izz></inertia>
+        </inertial>
+        <visual name="visual">
+          <geometry><cylinder><radius>0.1</radius><length>2.0</length></cylinder></geometry>
+        </visual>
+      </link>
+      <plugin filename="libgz-sim-comms-endpoint-system.so"
+              name="gz::sim::systems::CommsEndpoint">
+        <address>base_station_1</address>
+        <topic>base_station_1/rx</topic>
+      </plugin>
+    </model>
+
+    <model name="base_station_2">
+      <static>true</static>
+      <pose>-32 8 3.99 0 0 0</pose>
+      <link name="link">
+        <inertial><mass>1.0</mass>
+          <inertia><ixx>0.1</ixx><iyy>0.1</iyy><izz>0.1</izz></inertia>
+        </inertial>
+        <visual name="visual">
+          <geometry><cylinder><radius>0.1</radius><length>2.0</length></cylinder></geometry>
+        </visual>
+      </link>
+      <plugin filename="libgz-sim-comms-endpoint-system.so"
+              name="gz::sim::systems::CommsEndpoint">
+        <address>base_station_2</address>
+        <topic>base_station_2/rx</topic>
+      </plugin>
+    </model>
+
+    <model name="base_station_3">
+      <static>true</static>
+      <pose>38 -10 3.99 0 0 0</pose>
+      <link name="link">
+        <inertial><mass>1.0</mass>
+          <inertia><ixx>0.1</ixx><iyy>0.1</iyy><izz>0.1</izz></inertia>
+        </inertial>
+        <visual name="visual">
+          <geometry><cylinder><radius>0.1</radius><length>2.0</length></cylinder></geometry>
+        </visual>
+      </link>
+      <plugin filename="libgz-sim-comms-endpoint-system.so"
+              name="gz::sim::systems::CommsEndpoint">
+        <address>base_station_3</address>
+        <topic>base_station_3/rx</topic>
+      </plugin>
+    </model>
+
   </world>
 </sdf>
