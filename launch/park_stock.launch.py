@@ -139,6 +139,75 @@ What is project code, and why upstream cannot supply it
   `ekf_node_map`; a second producer on that edge does not error, it flickers
   (gotcha #34 family).
 
+  4. Ground segmentation, OPTIONAL and OFF by default
+     (`ground_segmentation:=true`). Starts Patchwork++'s official ROS 2 node
+     on /a200_0000/sensors/lidar3d_0/points, publishing /patchworkpp/ground,
+     /patchworkpp/nonground and /patchworkpp/cloud. Nothing in the navigation
+     stack consumes them; they are read only by the `Ground` and `Objects`
+     displays already present in config/nav2_park.rviz. Measured on our 3D
+     lidar: ~6.6k finite points in, ~81% classified ground, 20 Hz, 7.4% of one
+     core.
+
+     PREREQUISITE, and why it is off by default: the node is NOT in this repo
+     and not in /opt/ros/jazzy. It comes from a workspace build of the
+     upstream package (see its README):
+       cd ~/ros2_ws && colcon build --packages-select patchworkpp
+     A fresh clone will not have it, so a default-on argument would break an
+     ordinary launch. When it IS requested and the executable is absent, an
+     OpaqueFunction check aborts the launch with that path and that command
+     rather than a bare FileNotFoundError.
+
+     Started by ABSOLUTE executable path with no `package=`, exactly like
+     tools/rssi_localization_node.py above, and with the workspace's lib
+     directory PREPENDED to LD_LIBRARY_PATH for that node only
+     (`additional_env`, not a launch-wide AppendEnvironmentVariable, so
+     nothing else in this launch is affected; prepended and not replaced, or
+     the node loses /opt/ros/jazzy/lib and every ROS library with it).
+
+     That env is REQUIRED, and `ldd` is exactly the check that hides why.
+     GroundSegmentationServer is an rclcpp component: main() hands the class
+     name to class_loader, which dlopens `libgseg_component.so` AT RUNTIME.
+     A dlopen leaves no DT_NEEDED entry, so `ldd` on patchworkpp_node lists
+     only /opt/ros/jazzy libraries and reads as "self-contained w.r.t. the
+     workspace" - and the node then aborts on startup with
+     `class_loader::LibraryLoadException ... libgseg_component.so: cannot
+     open shared object file`, leaving /patchworkpp/ground and
+     /patchworkpp/nonground with zero publishers. Do not re-derive this from
+     `ldd`; it cannot see a class_loader dlopen. The binary carries no
+     RUNPATH either, so LD_LIBRARY_PATH is the only channel.
+
+     That one library is the whole exposure. `libgseg_component.so` is the
+     only shared object in the workspace install (the rest are static .a),
+     it is the only library name appearing as a literal string in the
+     binary, and its own DT_NEEDED list resolves entirely to
+     /opt/ros/jazzy/lib and the system - which the prepend preserves. The
+     package ships no plugin description XML, so there is no second
+     component to load.
+
+     AMENT_PREFIX_PATH is still deliberately NOT extended: nothing here
+     needs the workspace's ament index, and putting it there would couple
+     this repo to a workspace outside it.
+
+     base_frame is `lidar3d_0_laser`, NOT the package default `base_link`.
+     This is not a preference: GroundSegmentationServer.cpp:151-159 assigns
+     `header.frame_id = base_frame_` and the package's ROS layer contains no
+     tf2 buffer and performs no lookup, so the parameter is a pure RELABEL and
+     the output coordinates stay in the frame the cloud arrived in. Labelling
+     untransformed lidar-frame points `base_link` would draw them in the wrong
+     place; labelling them with the frame they are actually in lets rviz
+     transform them correctly through TF, which exists. Do not "fix" this to
+     base_link.
+
+     sensor_height is 0.69, not the package's 1.88 (a KITTI car default). The
+     generated URDF puts lidar3d_0_laser 0.5617 m above base_link, which sits
+     ~0.13 m above the ground, and the measured ground z-median in the sensor
+     frame is -0.693. The parameter feeds Patchwork++'s initial seed
+     selection, so it is not cosmetic. Every other parameter below is carried
+     across verbatim from upstream's patchworkpp.launch.py - starting the node
+     bare would silently fall back to the C++ defaults for all of them.
+     Upstream's own rviz node is deliberately NOT carried across: the stock
+     clearpath_viz view stays the only rviz in this file.
+
 The readiness gate
 ------------------
   Nav2 autostarts, activates planner_server and immediately looks up
@@ -285,6 +354,7 @@ No scoping - and why re-adding it breaks the launch
 Usage:
     ros2 launch launch/park_stock.launch.py
     ros2 launch launch/park_stock.launch.py localization:=rssi rviz:=false
+    ros2 launch launch/park_stock.launch.py ground_segmentation:=true
 
     # navigation stages only, against a sim that is already running:
     ros2 launch launch/park_stock.launch.py world_and_robot:=false rviz:=false
@@ -301,6 +371,7 @@ from launch.actions import (
     ExecuteProcess,
     GroupAction,
     IncludeLaunchDescription,
+    OpaqueFunction,
     RegisterEventHandler,
     SetEnvironmentVariable,
     SetLaunchConfiguration,
@@ -309,7 +380,11 @@ from launch.actions import (
 from launch.conditions import IfCondition, UnlessCondition
 from launch.event_handlers import OnProcessExit
 from launch.launch_description_sources import PythonLaunchDescriptionSource
-from launch.substitutions import EqualsSubstitution, LaunchConfiguration
+from launch.substitutions import (
+    EnvironmentVariable,
+    EqualsSubstitution,
+    LaunchConfiguration,
+)
 from launch_ros.actions import Node, PushRosNamespace, SetParameter, SetRemap
 from launch_ros.descriptions import ParameterFile
 from launch_ros.parameter_descriptions import ParameterValue
@@ -338,6 +413,53 @@ GPS_CONFIG = os.path.join(REPO, "config", "gps_localization.yaml")
 RSSI_CONFIG = os.path.join(REPO, "config", "rssi_localization.yaml")
 RSSI_NODE = os.path.join(REPO, "tools", "rssi_localization_node.py")
 RSSI_VIZ_NODE = os.path.join(REPO, "tools", "rssi_viz.py")
+
+# Patchwork++'s node, built out-of-repo into ~/ros2_ws (see point 4 of the
+# docstring). Absolute path, no `package=`: nothing here needs the
+# workspace's ament index, so it never has to reach AMENT_PREFIX_PATH.
+PATCHWORKPP_NODE = os.path.expanduser(
+    "~/ros2_ws/install/patchworkpp/lib/patchworkpp/patchworkpp_node")
+
+# Derived from the executable path, never written out a second time - the two
+# must not drift. <ws>/install/patchworkpp/lib, i.e. the parent of the
+# executable's own directory.
+PATCHWORKPP_LIB_DIR = os.path.dirname(os.path.dirname(PATCHWORKPP_NODE))
+
+# dlopened by class_loader at runtime, so it is invisible to `ldd` and to any
+# DT_NEEDED-based check - see point 4 of the docstring. Both a guard target
+# and the reason PATCHWORKPP_LIB_DIR goes on the node's LD_LIBRARY_PATH.
+PATCHWORKPP_COMPONENT_LIB = os.path.join(
+    PATCHWORKPP_LIB_DIR, "libgseg_component.so")
+
+PATCHWORKPP_BUILD_CMD = (
+    "cd ~/ros2_ws && colcon build --packages-select patchworkpp")
+
+# The frame the 3D lidar cloud arrives in. base_frame is a RELABEL, not a
+# transform (GroundSegmentationServer.cpp:151-159) - see the docstring.
+LIDAR3D_FRAME = "lidar3d_0_laser"
+
+# lidar3d_0_laser is 0.5617 m above base_link, which sits ~0.13 m above the
+# terrain; independently confirmed by the measured ground z-median of -0.693.
+PATCHWORKPP_SENSOR_HEIGHT = 0.69
+
+# Carried across verbatim from upstream patchworkpp.launch.py, minus
+# sensor_height (above), base_frame and use_sim_time (set per-launch).
+# Omitting any of these would silently take the C++ default instead.
+PATCHWORKPP_PARAMS = {
+    "algorithm": "patchworkpp",
+    "num_iter": 3,           # iterations of PCA ground-plane estimation
+    "num_lpr": 20,           # max points used as lowest-point representative
+    "num_min_pts": 0,        # min points to call a patch a ground plane
+    "th_seeds": 0.3,         # LPR threshold, initial ground seed selection
+    "th_dist": 0.125,        # ground thickness threshold
+    "th_seeds_v": 0.25,      # LPR threshold, vertical structure seeds
+    "th_dist_v": 0.9,        # vertical structure thickness threshold
+    "max_range": 80.0,       # max range of the ground estimation area
+    "min_range": 1.0,        # min range of the ground estimation area
+    "uprightness_thr": 0.101,  # uprightness threshold used in GLE
+    "verbose": True,
+}
+
 # Stock clearpath_viz nav2.rviz plus exactly two added displays: a
 # PointCloud2 for the 3D lidar (sensors/lidar3d_0/points - stock ships none,
 # its two PointCloud displays are costmap voxel_marked_cloud markers) and a
@@ -436,6 +558,7 @@ def generate_launch_description() -> LaunchDescription:
     world = LaunchConfiguration("world")
     world_and_robot = LaunchConfiguration("world_and_robot")
     localization = LaunchConfiguration("localization")
+    ground_segmentation = LaunchConfiguration("ground_segmentation")
 
     pkg_clearpath_gz = get_package_share_directory("clearpath_gz")
     pkg_clearpath_viz = get_package_share_directory("clearpath_viz")
@@ -515,6 +638,64 @@ def generate_launch_description() -> LaunchDescription:
             parameters=[{"use_sim_time": use_sim_time}],
             condition=backend("rssi"),
         )
+
+    def patchworkpp():
+        """Patchwork++ ground segmentation - optional, off by default.
+
+        Started exactly like rssi_localization_node.py: absolute `executable`
+        with no `package=`, because ~/ros2_ws is not on AMENT_PREFIX_PATH and
+        deliberately is not put there. No namespace and no TF_REMAPS - it
+        publishes absolute /patchworkpp/* topics and no TF at all. The
+        subscription name is the node's own `pointcloud_topic`
+        (GroundSegmentationServer.cpp:108). The condition rides on this Node
+        directly - no GroupAction here.
+
+        `additional_env` scopes LD_LIBRARY_PATH to THIS node, and prepends so
+        the inherited value (/opt/ros/jazzy/lib and the rest) survives. It is
+        what makes the class_loader dlopen of libgseg_component.so resolve -
+        see point 4 of the docstring for why `ldd` does not show that need.
+        """
+        return Node(
+            executable=PATCHWORKPP_NODE,
+            name="patchworkpp_node",
+            output="screen",
+            additional_env={
+                "LD_LIBRARY_PATH": [
+                    PATCHWORKPP_LIB_DIR, ":",
+                    EnvironmentVariable("LD_LIBRARY_PATH", default_value=""),
+                ],
+            },
+            remappings=[
+                ("pointcloud_topic",
+                 "/" + NAMESPACE + "/sensors/lidar3d_0/points"),
+            ],
+            parameters=[dict(
+                PATCHWORKPP_PARAMS,
+                # A relabel, not a transform: the output stays in the lidar
+                # frame, so this must name that frame. See the docstring.
+                base_frame=LIDAR3D_FRAME,
+                sensor_height=PATCHWORKPP_SENSOR_HEIGHT,
+                use_sim_time=use_sim_time,
+            )],
+            condition=IfCondition(ground_segmentation),
+        )
+
+    def check_patchworkpp(context, *args, **kwargs):
+        """Fail loudly, and by name, when the out-of-repo build is missing.
+
+        BOTH files are required, and the second is the one a naive check
+        misses: the executable dlopens libgseg_component.so through
+        class_loader at runtime, so an executable-only guard passes and the
+        node then aborts seconds later with a LibraryLoadException (see point
+        4 of the docstring).
+        """
+        for path in (PATCHWORKPP_NODE, PATCHWORKPP_COMPONENT_LIB):
+            if not os.path.exists(path):
+                return [Shutdown(
+                    reason="ground_segmentation:=true but the Patchwork++ "
+                           f"build is incomplete: {path} does not exist. "
+                           f"Build it with: {PATCHWORKPP_BUILD_CMD}")]
+        return None
 
     def ekf_node_map(config):
         """The single map -> odom publisher. Never a second one."""
@@ -601,6 +782,11 @@ def generate_launch_description() -> LaunchDescription:
 
             # The live marker view of that same measurement, same condition.
             rssi_viz(),
+
+            # Ground segmentation - off unless ground_segmentation:=true.
+            # Independent of the localization backend: it reads the 3D lidar
+            # and is consumed only by rviz. Condition on the Node itself.
+            patchworkpp(),
 
             # Stage 1b - RSSI. Same contract, no geodetic stage: trilateration
             # solves directly in map metres from surveyed tower coordinates, so
@@ -751,6 +937,13 @@ def generate_launch_description() -> LaunchDescription:
                                           "PointCloud2 and the RSSI "
                                           "MarkerArray, "
                                           "config/nav2_park.rviz)"),
+        DeclareLaunchArgument("ground_segmentation", default_value="false",
+                              choices=["true", "false"],
+                              description="start Patchwork++ ground "
+                                          "segmentation on the 3D lidar "
+                                          "(/patchworkpp/ground, "
+                                          "/patchworkpp/nonground); needs the "
+                                          "out-of-repo ~/ros2_ws build"),
     ] + [
         DeclareLaunchArgument(element, default_value=default,
                               description=f"{element} of the robot spawn pose "
@@ -761,6 +954,14 @@ def generate_launch_description() -> LaunchDescription:
 
         # MUST precede the gz_sim include - see the ordering ruling above.
         AppendEnvironmentVariable("AMENT_PREFIX_PATH", GZ_PREFIX, prepend=True),
+
+        # Ahead of everything it could waste: if the out-of-repo build is
+        # missing, say so with the path and the build command instead of
+        # letting launch_ros raise a bare FileNotFoundError once Gazebo is
+        # already up. An OpaqueFunction, not a GroupAction - it introduces no
+        # scope (see "No scoping" above).
+        OpaqueFunction(function=check_patchworkpp,
+                       condition=IfCondition(ground_segmentation)),
 
         # Stock world.
         stock(pkg_clearpath_gz, "gz_sim.launch.py", {

@@ -41,3 +41,6 @@ token.txt
 *.log
 __pycache__/
 *.pyc
+
+# ROS 2 launch logs, written to the working directory a launch is run from
+log/

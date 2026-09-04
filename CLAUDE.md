@@ -991,7 +991,18 @@ nothing when the name is absent. So call `/gui/move_to` with
 the robot's pose, the GUI holds the visual. Use a bogus entity name as a
 negative control. Verified 2026-09-01: camera moved to
 `(44.182, 0.066, 3.470)`, 1.46 m from the robot; the bogus call did not move
-it. `RUN_SIM.md` A3–A8 carry this sequence and its gates verbatim.
+it.
+
+**Two corrections from 2026-09-03, both found live.** `/gui/camera/pose` is a
+**topic, not a service** — the gz log says `Camera pose topic advertised on
+[/gui/camera/pose]`, `gz topic -l` lists it and `gz service -l` does not, so
+the `gz service -s /gui/camera/pose` form can only time out. Read it with
+`gz topic -e -t /gui/camera/pose -n 1`. And `/gui/move_to`, though genuinely
+advertised as a service, is **not reliably responsive**: it timed out at 5 s,
+10 s and 20 s on one run after answering on an earlier one. So the sequence
+above is corroboration when it answers, not a gate — there is no verified
+programmatic GUI-presence check, and `RUN_SIM.md` A6 now gates on a human
+looking at the GUI window instead.
 
 Note that separating the stages buys nothing for gotcha #27 — there is still
 no automatic controller recovery on this path, and park's 42% spawner-race
@@ -1023,3 +1034,52 @@ publishes an all-zero pose covariance so `R` floors to `1e-9`, leaving `P`
 alone in the Mahalanobis denominator. The outlier is ~1.1e7 sigmas, but the
 *legitimate* first jump from map origin to spawn is ~101 sigmas — a threshold
 of 10 would reject that too and wedge the filter at `(0,0)` for ~416 s.
+
+**41. Patchwork++ ground segmentation is an out-of-repo dependency with two
+traps that both present as silence.** The node is not in this repo and not in
+`/opt/ros/jazzy`; it comes from a workspace build of
+`github.com/url-kaist/patchwork-plusplus` in `~/ros2_ws`
+(`colcon build --packages-select patchworkpp`), which is why
+`launch/park_stock.launch.py`'s `ground_segmentation` defaults to `false` and
+an `OpaqueFunction` aborts the launch by path and build command when the
+executable or its component library is missing. With `:=true` it subscribes
+to `/a200_0000/sensors/lidar3d_0/points` and publishes `/patchworkpp/ground`,
+`/patchworkpp/nonground` and `/patchworkpp/cloud`, which
+`config/nav2_park.rviz`'s `Ground` and `Objects` displays render; nothing in
+the navigation stack consumes them. Measured on park 2026-09-03 over 81
+scans: 5,360 ground / 1,231 non-ground of 6,591 finite points =
+**81.32% ground**, ~15.2 Hz, `frame_id lidar3d_0_laser`.
+
+Trap (a) — **`base_frame` is a pure relabel, not a transform.**
+`GroundSegmentationServer.cpp:151-159` assigns `header.frame_id = base_frame_`
+and the package's ROS layer contains no `tf2_ros` at all, so no lookup
+happens and the coordinates stay in the frame the cloud arrived in. It must
+therefore be `lidar3d_0_laser`, not the package default `base_link` — the
+default draws lidar-frame points in the wrong place while looking configured.
+
+Trap (b) — **the executable dlopens `libgseg_component.so` through
+`class_loader` at runtime, and `ldd` cannot see that.** `ldd` on
+`patchworkpp_node` lists only `/opt/ros/jazzy` libraries and reads as
+self-contained; the node then aborts with
+`class_loader::LibraryLoadException ... libgseg_component.so: cannot open
+shared object file`, leaving both output topics with zero publishers. The
+binary carries no RUNPATH, so `LD_LIBRARY_PATH` must carry the workspace lib
+dir (`~/ros2_ws/install/patchworkpp/lib/patchworkpp`'s parent) — scoped to
+that node via `additional_env`, prepended so `/opt/ros/jazzy/lib` survives.
+
+**`sensor_height` is 0.69, not the package default 1.88** (a KITTI car). The
+generated URDF puts `lidar3d_0_laser` 0.5617 m above `base_link`, which sits
+~0.13 m above ground. It feeds the initial seed selection, so it is not
+cosmetic — but honestly, on park it is **not load-bearing**: changing it moved
+the ground fraction only 81.1% → 81.32%, because park is flat. It would
+matter on lake's 21° slopes.
+
+**`autoware_ground_filter` was tried and rejects our cloud outright** — `The
+pointcloud layout is not compatible with PointXYZIRCAEDT or PointXYZIRC`. The
+Gazebo `gpu_lidar` bridge cloud is `point_step 32` with `intensity FLOAT32@16`
+and `ring U16@24` and no `return_type`; Autoware wants `point_step 16`. Do not
+re-try it without converting the cloud first.
+
+**The 3D lidar publishes 13,500 points of which only ~6,577 are finite.** The
+rest are non-returns, and Patchwork++ passes them straight through into the
+non-ground cloud as **±inf** — not NaN, so `skip_nans` will not drop them.

@@ -36,7 +36,12 @@ source /opt/ros/jazzy/setup.bash
 ./scripts/apply_config.sh default
 ```
 
-Required: `imu_enu` appears in the printed SDF sensor list.
+The config depends on the A7 path chosen: `default` for A7a and A7b,
+`radio` for A7c. For A7c run `./scripts/apply_config.sh radio` instead.
+
+Required: `imu_enu` appears in the printed SDF sensor list. Under `radio`
+the RF comms endpoint is **not** in that list; that is expected, not a
+failed gate.
 
 ## A3 — Stage 1: the world
 
@@ -139,25 +144,41 @@ by the server, not the GUI (gotcha #39). `/gui/screenshot` returns
 ```bash
 gz service -s /gui/move_to --reqtype gz.msgs.GUICamera \
   --reptype gz.msgs.Boolean --timeout 5000 --req 'name: "a200_0000/robot"'
-gz service -s /gui/camera/pose --reqtype gz.msgs.Empty \
-  --reptype gz.msgs.Pose --timeout 5000 --req ''
 ```
 
-Required: the camera pose is near the robot's A4 pose (measured 1.46 m from
-it). Negative control — repeat both with a bogus `name:`; the camera must
-**not** move. If the camera does not move for `a200_0000/robot`, the GUI
-missed the spawn: stop (Part C) and restart from A1.
+`/gui/camera/pose` is a **topic, not a service** — it is listed by
+`gz topic -l`, not by `gz service -l`, and a `gz service -s` call on it can
+only time out. Read it as a topic:
+
+```bash
+gz topic -e -t /gui/camera/pose -n 1
+```
+
+`/gui/move_to` is advertised but is **not reliably responsive** — verified
+timing out at 5 s, 10 s and 20 s on one run while answering on an earlier
+one. So there is no dependable programmatic check here, and a hung
+`gz service` call is not evidence of anything.
+
+**Gate: human confirmation.** Look at the Gazebo GUI window and confirm the
+Husky is visible in park. If `/gui/move_to` does answer, the camera pose
+read above must be near the robot's A4 pose (measured 1.46 m from it), and a
+repeat with a bogus `name:` must **not** move it — treat that as
+corroboration only. If the robot is not visible in the GUI, the GUI missed
+the spawn: stop (Part C) and restart from A1.
 
 ## A7 — Stage 3: choose ONE localization path
 
-**A7a and A7b are alternatives, not steps.** slam_toolbox and
-`ekf_node_map` both publish `map -> odom`; running both puts two producers on
-that edge and fails silently (gotcha #34 family). Pick one.
+**A7a, A7b and A7c are alternatives, not steps.** slam_toolbox,
+`ekf_node_map` and the RSSI backend all publish `map -> odom`; running two
+puts two producers on that edge and fails silently (gotcha #34 family). Pick
+one. A7d is optional and combines with any of them.
 
 | Path | Use when |
 |---|---|
 | **A7a — nav2 + GPS** | autonomous navigation in park; the stack `NAV_PARK.md` verifies |
 | **A7b — SLAM** | building a map with slam_toolbox; no GPS localization |
+| **A7c — nav2 + RSSI** | navigation localized from the RF comms towers instead of GPS; requires A2 `radio` |
+| **A7d — ground segmentation** | optional add-on to any of the above; requires an out-of-repo build |
 
 ### A7a — nav2 + GPS localization
 
@@ -179,7 +200,9 @@ python3 tools/check_nav2_ready.py
 ```
 
 Required: `READY`, 8 lifecycle nodes active, both action servers, both
-costmaps OK.
+costmaps OK. A first run that reports `map -> odom : MISSING` is not a
+result — re-run the tool once and believe the second run (gotcha #14
+family).
 
 ### A7b — SLAM
 
@@ -207,6 +230,74 @@ ros2 topic info -v /a200_0000/map | grep -m1 "Publisher count"
 python3 tools/check_nav2_ready.py    # read only its "== transforms" result
 ```
 
+Re-run `check_nav2_ready.py` once before believing a `MISSING` transform.
+
+### A7c — nav2 + RSSI localization
+
+A2 must have applied `radio`, **not** `default`.
+
+```bash
+setsid nohup bash -c 'source /opt/ros/jazzy/setup.bash && \
+  export AMENT_PREFIX_PATH=/home/thinhpham/Documents/Husky_viz/gz:$AMENT_PREFIX_PATH && \
+  ros2 launch /home/thinhpham/Documents/Husky_viz/launch/park_stock.launch.py \
+    world_and_robot:=false localization:=rssi' \
+  > /tmp/nav.log 2>&1 & disown
+```
+
+`world_and_robot:=false` is mandatory here for the same reason as in A7a.
+
+`worlds/park.sdf` must carry the four `base_station` RFComms towers. The
+committed file at `HEAD` does **not** — they exist only in the working tree,
+so from a fresh clone this path cannot work until that change is committed.
+Check before starting:
+
+```bash
+grep -c '<model name="base_station' worlds/park.sdf     # expect 4
+```
+
+Gates:
+
+```bash
+python3 tools/check_nav2_ready.py
+ros2 topic hz /a200_0000/rssi/pose      # expect ~1 Hz; Ctrl-C to stop
+```
+
+Required: `READY` (re-run the tool once before believing a `MISSING`
+transform — gotcha #14 family), and `/a200_0000/rssi/pose` publishing at
+~1 Hz.
+
+### A7d — ground segmentation (optional)
+
+Combines with A7a, A7b or A7c. Requires an out-of-repo build of Patchwork++
+(not in this repo and not in `/opt/ros/jazzy`), per its upstream README:
+
+```bash
+mkdir -p ~/ros2_ws/src && cd ~/ros2_ws/src
+git clone https://github.com/url-kaist/patchwork-plusplus.git
+cd ~/ros2_ws && colcon build --packages-select patchworkpp
+```
+
+Add `ground_segmentation:=true` to the A7a or A7c launch command:
+
+```bash
+setsid nohup bash -c 'source /opt/ros/jazzy/setup.bash && \
+  export AMENT_PREFIX_PATH=/home/thinhpham/Documents/Husky_viz/gz:$AMENT_PREFIX_PATH && \
+  ros2 launch /home/thinhpham/Documents/Husky_viz/launch/park_stock.launch.py \
+    world_and_robot:=false ground_segmentation:=true' \
+  > /tmp/nav.log 2>&1 & disown
+```
+
+Gates:
+
+```bash
+ros2 topic info -v /patchworkpp/ground | grep -m1 "Publisher count"
+grep -c "LibraryLoadException" /tmp/nav.log
+```
+
+Required: `Publisher count: 1`, and `0` matches for `LibraryLoadException`.
+`/patchworkpp/ground` and `/patchworkpp/nonground` are rendered by the
+`Ground` and `Objects` displays in `config/nav2_park.rviz`.
+
 ## A8 — Checklist
 
 There is no phase table and no `READY` verdict on this path. All must hold:
@@ -219,8 +310,9 @@ There is no phase table and no `READY` verdict on this path. All must hold:
 | pose | ≈ `[45.640, 0.021, 3.120]` yaw `2.6132`; a large negative z means it fell through the terrain | A4 |
 | sensors | `Publisher count: 1` on all four topics | A4 |
 | controllers | both `active` | A5 |
-| GUI has the robot | `/gui/camera/pose` moved to it; bogus name did not move it | A6 |
-| navigation | A7a `READY` **or** A7b `Publisher count: 1` on `/a200_0000/map` with `map -> odom` | A7 |
+| GUI has the robot | the Husky is visible in the Gazebo GUI window (human confirmation) | A6 |
+| navigation | A7a `READY`, **or** A7b `Publisher count: 1` on `/a200_0000/map` with `map -> odom`, **or** A7c `READY` with `/a200_0000/rssi/pose` at ~1 Hz | A7 |
+| ground segmentation (only if A7d was used) | `Publisher count: 1` on `/patchworkpp/ground`, no `LibraryLoadException` | A7d |
 
 Never conclude a sensor is missing from `ros2 topic list` (gotcha #38) —
 only `ros2 topic info -v` on the specific topic counts.

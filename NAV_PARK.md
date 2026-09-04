@@ -25,11 +25,13 @@ Gate: every row of the A8 checklist holds. In particular:
   `active`. Nothing on this path recovers the spawner automatically and park
   loses that race in 42% of runs (gotcha #27); re-run A5's
   `--switch-timeout 30` spawner by hand until both are active.
-- A6 - `/gui/camera/pose` moved to `a200_0000/robot` and did **not** move for
-  a bogus name. If it did not move, the GUI missed the spawn: stop (Part C)
-  and restart from A1.
+- A6 - the Husky is visible in the Gazebo GUI window. `/gui/move_to` is not
+  a dependable check (it can time out), and `/gui/camera/pose` is a topic,
+  not a service - A6 carries the current form. If the robot is not visible,
+  the GUI missed the spawn: stop (Part C) and restart from A1.
 - A7a - `python3 tools/check_nav2_ready.py` prints `READY`, 8 lifecycle nodes
-  active, both action servers, both costmaps OK.
+  active, both action servers, both costmaps OK. Re-run the tool once before
+  believing a `map -> odom : MISSING` result (gotcha #14 family).
 There is no `READY park default nav` verdict on this path, and
 `scripts/sim.py status` does not apply to it (A9).
 

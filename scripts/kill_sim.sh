@@ -35,12 +35,13 @@ PATTERNS=(
   # rssi_localization_node only died because its `namespace` puts
   # "-r __ns:=/a200_0000" on its command line, which is incidental, so it is
   # listed explicitly too. See CLAUDE.md #21.
-  # NOTE: these must stay ABOVE the nav2 block below. sim.py's
-  # parse_kill_patterns stops at the first closing-parenthesis character
-  # anywhere in this array, and that block's comment contains one, so every
-  # entry after it is invisible to sim.py.
   "tools/rssi_viz.py"
   "tools/rssi_localization_node.py"
+  # Ground segmentation node (ros2_ws package, run by executable path). It
+  # only died because "-r pointcloud_topic:=/a200_0000/..." happens to contain
+  # "a200_0000", which sim.py's EXTRA_SWEEP matches - incidental, same as the
+  # rssi node above, so match its install path explicitly. See CLAUDE.md #21.
+  "patchworkpp/lib/patchworkpp/patchworkpp_node"
   # nav2 + GPS localization stack (launch/park_stock.launch.py) - see CLAUDE.md #21
   "navsat_transform_node"
   "ekf_node_map"
